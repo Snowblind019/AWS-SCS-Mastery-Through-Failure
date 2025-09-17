@@ -55,7 +55,7 @@ By the Will of the Lord, when the time comes to retake the exam, my goal is to u
 
 | Domain | Title | Status | Notes/Writeup | Diagram | Hands-On |
 |--------|-------|--------|----------------|---------|----------|
-| 1 | Threat Detection and Incident Response | ⬜ Not Started | ❌ | ❌ | ❌ |
+| 1 | Threat Detection and Incident Response | 🟨 In Progress | [View](./Domain%201%20-%20Threat%20Detection%20and%20Incident%20Response/Notes) | ❌ | ❌ |
 | 2 | Security Logging and Monitoring | ⬜ Not Started | ❌ | ❌ | ❌ |
 | 3 | Infrastructure Security | ⬜ Not Started | ❌ | ❌ | ❌ |
 | 4 | Identity and Access Management | ⬜ Not Started | ❌ | ❌ | ❌ |
