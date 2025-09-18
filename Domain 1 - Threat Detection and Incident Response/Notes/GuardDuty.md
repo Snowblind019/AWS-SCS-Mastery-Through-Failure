@@ -1,171 +1,175 @@
-# Amazon GuardDuty — Native Threat Detection in AWS
+# Amazon GuardDuty
 
-Amazon GuardDuty is AWS's native threat detection service. It continuously monitors your AWS environment to identify signs of suspicious behavior or malicious activity. Whether it’s an IAM user signing in from an unusual IP, an EC2 instance contacting a known malware domain, or unexpected API activity — GuardDuty works behind the scenes to raise alerts called **findings**.
+Amazon GuardDuty is AWS's native threat detection service. It continuously monitors your AWS environment to identify signs of suspicious behavior or malicious activity. Whether it’s an IAM user signing in from an unusual IP, an EC2 instance contacting a known malware domain, or unexpected API activity — GuardDuty works behind the scenes to raise alerts called findings.
 
-To better internalize its purpose and functionality, I’ve found it helpful to think of GuardDuty in terms of traditional cybersecurity tools. In many ways, GuardDuty functions as a cloud-native blend of a **SIEM**, **IDS**, and **EDR** — and, when paired with automation tools, it can even mimic the behavior of a **SOAR** platform.
-
----
-
-## SIEM-Like Behavior
-
-Traditional SIEMs like Splunk, QRadar, or LogRhythm aggregate logs from multiple sources and generate alerts based on suspicious patterns. GuardDuty does this too — but it’s purpose-built for AWS. It ingests:
-
-- **CloudTrail logs** (API activity)  
-- **VPC Flow Logs** (network traffic)  
-- **DNS query logs**  
-- **EKS audit logs**
-
-It applies AWS-managed threat intelligence and machine learning models to detect threats in real time.
+To better internalize its purpose and functionality, I’ve found it helpful to think of GuardDuty in terms of traditional cybersecurity tools, this is due to Amazon having a unique naming convention for their services. In many ways, GuardDuty functions as a cloud-native blend of a **SIEM**, **IDS**, and **EDR** — and, when paired with automation tools, it can even mimic the behavior of a **SOAR** platform.
 
 ---
 
-## IDS-Like Capabilities
+## IDS – Intrusion Detection System
 
-Like an IDS (Intrusion Detection System), GuardDuty watches for known attack patterns or anomalous behaviors — but without interfering with network traffic. It is passive, meaning it detects but does not block. Detection is powered by:
+An IDS (Intrusion Detection System) simply monitors network traffic. It follows rules or intel that was input into it to detect suspicious patterns and then generates an alert. GuardDuty does this as well, but instead of monitoring networks it passively monitors:
 
-- Pre-integrated threat intelligence feeds from AWS and partners  
-- Signature-based detection  
-- Machine learning for anomaly detection
+- VPC Flow Logs  
+- DNS logs  
+- CloudTrail logs  
+- EKS audit logs  
 
-Think of it like a highly trained security guard that never sleeps — it doesn’t block the intruder, but it will immediately raise the alarm.
+It has built-in threat intel (rules) that are provided and kept up to date by AWS and AWS Partners. It's like an IDS, not an IPS, in the sense that it only alerts, but doesn't block or remediate anything.
 
----
+Types of threats it detects are:
 
-## EDR-Inspired Detection
-
-Traditional Endpoint Detection and Response (EDR) tools like CrowdStrike or SentinelOne monitor endpoints for anomalies (e.g., lateral movement, strange processes). GuardDuty mimics this at the cloud level:
-
-| EDR Monitors                         | GuardDuty Equivalent                         |
-|-------------------------------------|----------------------------------------------|
-| Endpoint devices (laptops, servers) | AWS account and resource behavior            |
-| Local file/process activity         | API calls, network traffic, log patterns     |
-| Lateral movement, privilege escalation | Unusual IAM usage, credential misuse    |
-| Malware callbacks                   | EC2 contacting known command-and-control servers |
+- **Credential misuse** – IAM user logs in from a country it never has before  
+- **Reconnaissance** (First step of Cyber Kill Chain) – attempted port scans on EC2 Instance  
+- **Malware C2 traffic** (Sixth step of Cyber Kill Chain) – EC2 talking to crypto mining domain  
+- **Anomalous behavior** – Root account suddenly disabling CloudTrail  
+- **Known bad IPs** – Traffic from a TOR node or malicious IP known from threat intel  
 
 ---
 
-## Turning GuardDuty into a SOAR (with EventBridge and Lambda)
+## EDR – Endpoint Detection and Response
 
-On its own, GuardDuty only generates alerts. But when paired with automation tools like EventBridge, Lambda, Step Functions, and Systems Manager, it becomes a reactive, automated responder — much like a SOAR (Security Orchestration, Automation, and Response) platform.
+An EDR tool like CrowdStrike or SentinelOne runs on endpoints (i.e., laptops, servers, etc.) and monitors behavior of the device in things like file access, process creation, login attempts and, when needed, they alert and take action by isolating the device and killing the process.
 
-### Example Workflow:
+GuardDuty relates to this in the following:
 
-1. GuardDuty raises a high-severity finding for an EC2 instance contacting a cryptomining domain.  
-2. EventBridge matches the finding to a rule.  
-3. Lambda is invoked and performs the following:
-   - Isolates the EC2 instance  
-   - Removes it from the Auto Scaling Group (ASG)  
-   - Revokes its IAM role permissions  
-   - Notifies the security team via Slack or SNS  
-
-By combining services, GuardDuty evolves from a passive detector into an active first responder.
+| EDR                     | GuardDuty                                                                 |
+|------------------------|---------------------------------------------------------------------------|
+| Watches behavior        | Watches AWS account and network behavior (CloudTrail, DNS, VPC Flow logs) |
+| Detects threats         | Also does this by using known signatures and machine learning             |
+| Endpoint = device       | In AWS, the “endpoint” is your AWS account or resources (EC2, IAM, etc.)  |
 
 ---
 
-## Setup Simplicity
+## What About SOAR?
 
-GuardDuty requires:
+A SOAR (Security Orchestration, Automation, and Response) is a SIEM that can also take action on the alerts. Normally GuardDuty can't take action on alerts, but if paired with **EventBridge** and **Lambda** it can also take action on the alerts.
 
-- No agents  
-- Just one click to enable  
+EventBridge watches for findings in real time, and then Lambda executes a custom code when an alert is triggered. You can combine this with **SSM**, **SNS**, and **Step Functions** for more features.
 
-Once enabled, it immediately starts analyzing logs in the background with no impact on system performance.
+An example flow would be as follows:
 
-### GuardDuty Watches:
+Let's say a High severity alert comes in on an EC2 instance;
 
-- Who’s calling APIs  
-- Where network traffic originates  
-- Which domains are being queried  
-
-It compares these behaviors against:
-
-- Threat intelligence feeds (e.g., TOR exit nodes, malware IPs)  
-- Known attacker patterns  
-- Machine learning models  
-
-All alerts are logged as **Findings** and can be forwarded to:
-
-- **Security Hub** (for centralized visibility)  
-- **Amazon Detective** (for investigation)  
-- **EventBridge** (for triggering automation)  
-- **Lambda** (for incident response)
+1. GuardDuty raises a High severity alert for that EC2  
+2. EventBridge sees the alert and matches it to a rule you made  
+3. EventBridge invokes a Lambda Function that does the following:  
+    - Isolates the EC2 Instance  
+    - Removes it from the ASG (Auto Scaling Group)  
+    - Revokes IAM (Identity Access Management) role permissions  
+    - Notifies security via Slack or email using SNS (Simple Notification Service)  
 
 ---
 
-## What GuardDuty Detects
+## Analogies
 
-### Account Compromise
+These are the security analogies I use to remember the features of GuardDuty. Out of the box it performs the same as a SIEM, IDS, and EDR, but if you add other services it can become a SOAR as well. For me this is a very good way of remembering the services it offers.
 
-- IAM user signs in from an unfamiliar country  
-- Root account disables CloudTrail or deletes logs  
-- Access key usage deviates from normal behavior  
+In a real-world analogy, GuardDuty is like a **security camera** that watches for intruders and shady behavior by using:
 
-### EC2 Compromise
+- **VPC Flow Logs** – for network traffic  
+- **CloudTrail Logs** – for user/API activity  
+- **DNS Logs** – for domain name lookups  
 
-- EC2 contacts known C2 (Command-and-Control) domains  
-- Sudden outbound traffic spikes suggest cryptomining  
-- DNS queries to malware-related domains  
-
-### Reconnaissance Activity
-
-- DNS queries that resemble data exfiltration attempts  
-
-
-### IAM Misuse
-
-- Sensitive API calls (e.g., `PutBucketAcl`, `DeleteTrail`) from unusual locations  
-- Unexpected actions like `AssumeRole`, `CreateAccessKey` from new IPs  
-
-### S3 Threats
-
-- Anonymous access to S3 from TOR or blacklisted IPs  
-- Unusual listing or downloading of sensitive data  
+It differs from CloudTrail in the fact that you don't write rules for it as you do in CloudTrail, but rather AWS does — as GuardDuty is fully managed by them. It uses **Machine Learning** and the **most up-to-date threat intel** that makes it able to give highly accurate alerts automatically.
 
 ---
 
-## Real-World Analogy
+## Ease of Setup
 
+Setting up GuardDuty is also easy. All it takes is 1 click and then it automatically starts analyzing logs behind the scenes.
 
-GuardDuty is like a smart building security system:
+It keeps its eyes open for stuff such as:
 
-- It monitors the hallways (**VPC Flow Logs**)  
-- Watches the doors (**CloudTrail API calls**)  
-- Tracks who’s asking for directions (**DNS queries**)  
-- Has a direct line to security experts (**AWS Threat Intel**)  
+- Who's calling APIs?  
+- Where is traffic coming from?  
+- What domains are being queried?  
 
-For example, it might alert you:  
-_"Someone at Door #3 is on every global watchlist. You might want to check that out."_
+It then matches the results against:
+
+- Known attack behaviors  
+- Threat intel feeds like bad IP lists, Tor, etc.  
+- Machine learning that understands patterns  
+
+After which it sends alerts (also called findings):
+
+- EC2 instance is communicating with a known cryptocurrency mining domain  
+- IAM user did something unusual at 02:00 from Russia  
+- Root user used with no MFA and tried to disable logging  
+
+These alarms come in the GuardDuty console, but you can also integrate it with other AWS services:
+
+- **Security Hub** – to centralize all findings from different services all into one centralized place  
+- **Detective** – to investigate alerts further  
+- **Organizations** – for multi-account setups  
+- **CloudWatch Events** – to trigger actions (like isolating an instance)  
+- **Lambda** – to automatically respond to findings  
 
 ---
 
-## Personal Example
+## More Detailed Reports on What GuardDuty Protects Against
 
-I once spun up a temporary EC2 instance for testing. A few days later, GuardDuty flagged:
+### Detecting Account Compromise – Stolen keys, root usage from unusual IPs
 
-**“EC2 instance `winterday2331` is communicating with IP `72.203.88.106` — part of a known cryptojacking operation.”**
+- An IAM user or root user is used from a country/IP that it has never logged in from before  
+- Someone logs in with an access key, and suddenly behaves very differently from usual  
+- The root account does dangerous actions (e.g., disabling CloudTrail, deleting logs, etc.)  
 
-I hadn't realized that SSH was open to the world — someone likely brute-forced it. GuardDuty detected outbound traffic to a known malicious IP using the VPC Flow Logs.
+### Detecting EC2 Compromise – Malware communication, crypto miners
 
-That IP had already been flagged by AWS threat intelligence for:
+- EC2 instance making connections to command-and-control servers (C2)  
+- EC2 sending lots of outbound traffic = possible crypto mining  
+- EC2 making DNS requests for known malware domains  
 
-- Anonymization behavior  
-- Bot activity  
-- Suspicious geographic access  
+### Detecting Recon Activity – Port Scans, DNS exfiltration
 
-### Because of GuardDuty, I was able to:
+- VPC Flow Logs showing many ports being scanned on your EC2  
+- DNS queries that look like data exfiltration, e.g., weird subdomains like `secretdata.xyzcompany.com.attacker.com`  
 
-- Receive a high-severity alert  
-- Shut down the EC2 instance  
-- Rotate any associated credentials  
-- Begin a full investigation  
+### IAM Abuse – Unusual API calls from unknown locations
 
-Without GuardDuty, I might not have noticed anything until serious damage was done.
+- An IAM user is calling sensitive APIs they never used before (e.g., `DeleteTrail`, `PutBucketAcl`)  
+- Requests are made from unfamiliar IPs or regions  
+- Spike in usage of actions like `AssumeRole`, `CreateAccessKey`  
+
+### S3 Threats – Public buckets accessed by Tor IPs
+
+Anonymous access to your S3 bucket from:
+
+- TOR exit nodes  
+- Blacklisted IPs  
+- Known scanning services  
+
+Files being read or listed from S3 buckets that were never meant to be public.
+
+---
+
+## Real-World Example
+
+Now for an example that could happen in real life. Let’s say that I spin up an EC2 instance to test something. Some days later, GuardDuty generates a finding:
+
+> "EC2 instance winterday2331 has established outbound communication with IP 72.203.88.106 — known for exhibiting high-risk behavior."
+
+I didn’t even know that the instance was compromised in this short time of creating it. Maybe I left SSH open to the world and someone brute forced it, or some other reason. It’s good I had GuardDuty monitoring, otherwise I wouldn’t have known about this.
+
+What GuardDuty was monitoring was the winterday2331's outbound traffic in the VPC Flow Logs. The IP address it found matched a known threat feed. 72.203.88.106 is actually a real malicious IP that is flagged as a High-Risk IP by the **minFraud** network. It shows the following signs:
+
+- Use of anonymizing services  
+- Automated traffic (bots or scripts)  
+- Unusual geographic or behavioral patterns  
+
+Because GuardDuty is being kept up to date with threat intel by AWS, it knows that this is a malicious IP and thus generated a **High severity alert** for it.
+
+In this instance I have to:
+
+- Shut down the instance to prevent the malware from running rampant any longer  
+- Rotate the keys (I will talk more about this in the relevant domain) so that the attacker can't access the EC2 instance anymore  
+- From here I can do more forensic investigating (that I won’t get into right now as it’s tied to another AWS service)  
 
 ---
 
 ## Final Thoughts
 
-GuardDuty isn’t just a "service that raises alerts." It's a **critical, automated lens** into the health and security of your AWS environment.
+GuardDuty isn’t just a "service that raises alerts." It's a critical, automated lens into the health and security of your AWS environment.
 
 With the right integrations, it doesn’t just tell you what’s wrong — it helps you take immediate action.
-
