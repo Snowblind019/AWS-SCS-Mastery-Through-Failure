@@ -169,6 +169,8 @@ Now for an example about how it would be in real life. The scenario: a vulnerabi
 
 ---
 
+## Final Thoughts
+
 **Security Hub may seem like a simple service (and it is), but it has a very vital role.**  
 It saves a lot of time and effort by bringing everything in one place for all to see and gives it a prioritization — saving you time from trying to find what is more critical.
 
