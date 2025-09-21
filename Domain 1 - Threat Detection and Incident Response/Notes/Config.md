@@ -31,7 +31,7 @@ Each snapshot counts as one **“configuration item.”**
 
 ## **Cybersecurity Analogy**
 
-Think of **AWS Config** like a **security camera + compliance officer**:
+Amazon has named this service quite well with a self explanatory name which is nice, but I still like using my analogies to remember everything. In cybersecruity **AWS Config** is like a **security camera + compliance officer**:
 
 - The **security camera** part records **every configuration change** to your AWS resources (like a DVR for your cloud).
 - The **compliance officer** part looks at these changes and says:
