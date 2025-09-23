@@ -1,151 +1,164 @@
 # **AWS Detective**
 
-**AWS Detective** is a service that helps you **investigate and analyze security incidents**.
+## **What is the service (and why it’s important)**
 
-Imagine something suspicious happens in your AWS account — like:
+**AWS Detective** is a **cloud-native investigation tool** that helps you analyze and understand **security events** across your AWS environment. It **doesn’t alert you** (like **GuardDuty**), and it **doesn’t block or patch** anything (like **WAF** or **Inspector**). Instead, it helps you **investigate** — piecing together clues from logs, graphs, and timelines to answer questions like:
 
-- **A user does something they shouldn’t**
-- **An EC2 instance starts making weird network connections**
-- **GuardDuty raises a high-severity alert**
+- **What happened to this compromised IAM user?**
+- **How did this EC2 instance get accessed?**
+- **Where did this API call come from?**
+- **Which resources were involved in this incident?**
 
-You need to **figure out what happened, when, why, who did it, and how bad it is**.  
-**Detective** is the service that helps you do that.
-
-It’s **not for prevention**. It’s for **after something suspicious happens**, and you want to **connect the dots** across logs, users, IPs, accounts, VPCs, etc.
-
----
-
-## **Cybersecurity Analogy**
-
-Amazon has named this service quite well with a self explanatory name which is nice, but I still like using my analogies to remember everything. In cybersecurity, **Detective is like a forensic investigator**.
-
-If **GuardDuty** is like an **alarm system** that says:
-
-> “Hey, I saw something suspicious!”
-
-Then **Detective** is **the investigator** who:
-
-- **Shows up at the scene**
-- **Reconstructs what happened**
-- **Follows the breadcrumbs**
-- **Builds a story of the attack**
-
-It pulls data from **GuardDuty, CloudTrail, VPC Flow Logs, IAM**, etc., and gives you a **visual timeline** and **relationship map**.
-
-## **Real-World Analogy**
-
-Imagine someone broke into your office building.  
-You don’t just want to know:
-
-> “An alarm was triggered at 2:43 AM.”
-
-You want to know:
-
-- **Who came in?**
-- **What door did they use?**
-- **What rooms did they go into?**
-- **What did they take?**
-- **Did they have help?**
-- **Did they come in before?**
-
-**AWS Detective** is like watching **footage from every camera**, combined with **employee badge logs, entry timestamps, item checkout history**, etc.  
-It **reconstructs what happened with context**, not just raw data.
+**Detective** builds **visual timelines** and **graphs of activity** so you can trace relationships across **accounts, users, IPs, VPCs, and workloads**.  
+It’s especially valuable for **security analysts** and **incident responders**, who need **context and correlation** — not just raw alerts.
 
 ---
 
-## **How It Works**
+## **Cybersecurity and Real World Analogy**
 
-Detective automatically **ingests and analyzes** data from the followiung data sources:
+### **Cybersecurity Analogy**
+Imagine you get a **GuardDuty** alert: “**IAM user has anomalous API activity.**”  
+With **Detective**, you click the user and instantly see:
 
-- **Amazon GuardDuty** findings
-- **AWS CloudTrail** logs
-- **VPC Flow Logs**
-- **IAM role sessions and user activity**
+- **When they logged in**
+- **What API calls they made**
+- **What resources they touched**
+- **What roles they assumed**
+- **What IP addresses they used**
+- **Whether they launched EC2, touched S3, or changed VPCs**
 
-It uses this data to **build a visual investigation graph**.
-### **How Detective Differs From Security Hub & GuardDuty**
+This **saves hours of log digging**.
 
-| **Service**   | **Role**                                                         |
-|---------------|------------------------------------------------------------------|
+### **Real World Analogy**
+Imagine you’re a **detective** investigating a **break-in** at a house.  
+You don’t just want the security camera footage that said “someone broke in.” You want:
 
-| **GuardDuty** | Raises alerts on suspicious behavior                             |
-| **Security Hub** | Aggregates findings and assigns severity/compliance          |
-| **Detective** | Investigates findings with **detail** and **visual evidence**    |
+- **Timeline** of when each door was opened  
+- **Which rooms** were entered  
+- **Who else** entered the house that day  
+- **Phone calls** or **alarms** made during the incident  
+- **Who the suspect interacted with**
 
-> Think of **GuardDuty** as the **alarm**, **Security Hub** as the **dashboard**, and **Detective** as the **investigator**.
+**AWS Detective** gives you that **timeline, relationship map, and evidence trail** — but for your **AWS account**.
 
 ---
 
-## **How It Helps**
+## **How it works / what it does**
 
-1. **See connections between entities**
-For example:  
-   - “This **IP address** was used by this **EC2 instance** that was launched by this **IAM user** after they **assumed this role**.”
-2. **Visualize timelines of activity**
-   - You can view **what happened before and after** the suspicious behavior.  
-   - **What did the user do** in the hours leading up to the incident?
-3. **Explore related entities**
-   - Click on an **IP address** and see what other users or EC2s have used it  
-   - See all activity by a specific **IAM user** over time  
-   - Explore connections between **VPCs**, **accounts**, or **logs**
-4. **Pivot easily across data**
+### **Ingests and analyzes logs automatically**
+**Detective pulls in:**
+
+- **VPC Flow Logs** (network traffic)  
+- **AWS CloudTrail** (API calls)  
+- **Amazon GuardDuty findings**
+
+You **don’t need to manually enable or parse** these logs — **Detective consumes and processes** them automatically once enabled.
+
+### **Creates a behavioral graph database**
+All ingested data is **organized into a graph**:
+
+- **Nodes:** resources (**IAM users, IP addresses, EC2 instances**, etc.)  
+- **Edges:** relationships (**who accessed what, when, from where**)  
+
+This graph is **continuously updated** and **stored for 365 days**.
+
+### **Correlates events and builds profiles**
+**Detective** automatically builds **profiles** for every entity (user, IP, instance, etc.):
+
+- **What was normal** for this entity (usual logins, API calls)  
+- **What changed recently** (new regions, higher access patterns)  
+- **What other entities** it interacted with
+
+### **Interactive investigation dashboards**
+For any AWS resource (e.g., a **suspicious EC2** or **IAM user**), you can:
+
+- **View timeline** of **API activity**  
+- **See network traffic** in/out of the instance  
+- **See which users or roles were assumed**  
+- **Compare recent behavior vs normal**  
+- **Drill down** to other **related entities** (pivoting)
+
+It’s **click-through visual evidence** for **root cause analysis**.
 
 ---
 
 ## **Pricing Models**
 
-**AWS Detective is billed based on data volume:**
+**AWS Detective pricing** is based on the **amount of data it ingests per GB**.
 
-| **Component**                 | **Pricing Notes**                                                           |
-|------------------------------|-----------------------------------------------------------------------------|
-| **Data Ingested**            | You pay **per GB ingested** from **CloudTrail**, **VPC Flow Logs**, and **GuardDuty** |
-| **No extra cost for GuardDuty findings** | These are **free to ingest** into Detective                               |
-| **No charges for queries or visualization** | Only the **raw ingestion** is billed                                   |
+| **Source Data Type**                                           | **Approximate Price**          |
+|----------------------------------------------------------------|--------------------------------|
+| **Ingested log data** (CloudTrail, VPC Flow Logs, GuardDuty)   | ~**$2.00 per GB per month**    |
 
-> You can **estimate pricing** using the AWS Pricing Calculator.
+There are **no upfront costs** and **no charges** for **queries, dashboards, or retention**.  
+**Detective stores and visualizes 12 months of data** without extra cost.
+
+**Cost-saving tips:**
+
+- **Use in regions/accounts** where investigations matter  
+- **GuardDuty and CloudTrail** generate lots of data — **enable selectively** if needed  
+- **Estimate costs** via **AWS Pricing Calculator** before full rollout
+
+---
+
+## **Other Explanations (if needed)**
+
+### **Detective is not a SIEM or alerting system**
+It’s important to know that:
+
+- It **does not send alerts**  
+- It **does not detect threats** on its own  
+- It **doesn’t have custom queries or rules** like a traditional SIEM
+
+Instead, it’s **purpose-built for incident response**:
+
+- You **start with an alert** (ex: from **GuardDuty**)  
+- You **investigate with Detective**  
+- You **uncover relationships** and answer the **“what happened?”** question
+
+### **Tightly integrated with other AWS services**
+**Detective** works especially well with:
+
+- **GuardDuty** → alerts **send you into Detective**  
+- **Security Hub** → **finding cards link directly** into Detective  
+- **IAM and EC2 Console** → **pivot** from specific users/instances to investigate
 
 ---
 
 ## **Real Life Example**
 
-Let’s say this happens:  
-**GuardDuty** says: “**EC2 instance `i-0123abcd` is communicating with a known Bitcoin mining IP address.**”
+Let’s say you’re on the **security team** at a **fintech startup**.  
+One morning, **Security Hub** flags a **high-severity GuardDuty finding**:
 
-You don’t know:
+> “**IAM User JohnDoe has credentials exfiltrated and is using API in unusual region.**”
 
-- **Who launched this EC2?**
-- **What permissions did it have?**
-- **What else did it connect to?**
-- **Did the attacker use stolen IAM credentials?**
+You jump into **Detective**:
 
-So you go into **AWS Detective**:
+1. Click **“Investigate in Detective.”**  
+2. See **JohnDoe’s timeline**: he normally operates from **US West**, but this time from **Russia**.  
+3. View **API calls**: he **created new EC2 instances**, **downloaded S3 objects**.  
+4. See **relationships**: instances launched in **new region**, traffic from **new IPs**.  
+5. Realize he also **assumed a role** used by your **billing team**.
 
-1. **Open the finding** from GuardDuty inside Detective  
-2. **Click on the EC2 instance ID**  
-3. **See:**
-   - **What IAM role** was attached  
-   - **Which user** launched it  
-   - **What IP addresses** it connected to  
-   - **What actions** that user took around the same time  
-   - **Whether the same user has done this before**
-4. **Build a complete timeline** of the attack  
-5. See if the **same IAM user** assumed any other roles  
-6. Identify **lateral movement**, similar behavior **across accounts**
+With all that context:
 
-You now have a **forensic story** of the attack — and can respond properly:
+- You immediately **disable the user**  
+- **Rotate credentials**  
+- Start **forensic investigation**  
+- **Audit** the **S3 bucket** downloads  
+- **Notify impacted customers**
 
-- **Revoke credentials**
-- **Isolate EC2**
-- **Patch the vulnerability**
-- **Adjust IAM permissions**
-- **Write a post-mortem**
+**Without Detective**, you’d be **sifting through CloudTrail logs line-by-line**. It would take **hours or days**.  
+**With Detective**, you **visualize the entire attack timeline** in **minutes**.
 
 ---
 
 ## **Final Thoughts**
 
-**AWS Detective** helps you **investigate smarter, not harder**.  
-It gives you the **full story — not just alerts** — by connecting the dots across your AWS logs and services.  
-When something feels wrong, **Detective is how you figure out the truth**.
+**AWS Detective isn’t about prevention or detection** — it’s about **answering questions after something suspicious happens**.  
+It gives you the **forensic tooling** to **investigate, correlate, and understand** security incidents **at scale** — **without** building complex **log pipelines** or **dashboards** yourself.
 
+It’s especially powerful for **incident responders**, **security engineers**, and **SOC analysts** who need **evidence-based, time-based, and relationship-based visibility** — **fast**.  
+It helps you go from **“an alert happened”** to **“here’s what happened, when, how, and what else was affected.”**
 
+If you're in an environment with **GuardDuty**, **Security Hub**, or **high compliance needs**, **Detective is a force multiplier**.

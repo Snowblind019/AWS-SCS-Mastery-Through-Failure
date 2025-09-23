@@ -1,137 +1,211 @@
 # **AWS Inspector**
 
-**Inspector** is a vulnerability scanner for your cloud environment. It automatically scans your **Amazon EC2** instances, containers (in **ECR**), and **Lambda** functions for known security vulnerabilities. These vulnerabilities consist of things like **outdated packages**, **unpatched software**, or **misconfigurations** that could be exploited.
+## **What is the service (and why it’s important)**
 
-**Inspector's value shines** when you're searching for holes in your infrastructure that attackers can exploit. It's most useful when you have **EC2 instances**, **containers**, and **Lambda** code that attackers are constantly looking for vulnerabilities in—stuff like unpatched packages and vulnerable libraries—so they can exploit it. **AWS Inspector finds** those holes in your security and shows you exactly where they are and how severe they are, so you can fix them before an attacker finds them.
+**AWS Inspector** is an **automated vulnerability scanner** for your cloud infrastructure. It continuously assesses the security of your:
+
+- **Amazon EC2** instances  
+- **Container images in Amazon ECR**  
+- **AWS Lambda** functions  
+
+Its job is to find known vulnerabilities, such as:
+
+- **Unpatched software**  
+- **Outdated libraries**  
+- **Dangerous misconfigurations**
+
+It helps you **find these issues before attackers do**.
+
+**Why it matters:**  
+Modern attackers don’t always brute-force. They **scan for soft targets** — services with known **CVEs (Common Vulnerabilities and Exposures)**. **Inspector** constantly checks your environment against public vulnerability databases and gives you a **report you can act on**.
 
 ---
 
-## **Cybersecurity Analogy**
+## **Cybersecurity and Real World Analogy**
 
-Amazon has named this service quite well with a self explanatory name which is nice, but I still like using my analogies to remember everything. In a cybersecurity analogy, **Inspector is like a security guard with a CVE checklist**. The guard wants into every system (**EC2**, containers, **Lambda**), looks at what's installed, checks the versions of every software, and then pulls out a giant book of known vulnerabilities (**CVE's**) and says:
+### **Cybersecurity Analogy**
 
-> “Hmm... **OpenSSL** version **1.1.1g**? That's vulnerable to **Heartbleed**. That's a critical problem.”
+Imagine you hire a full-time **security guard** who:
 
-**After which** it hands you a report saying:
+- **Walks through your servers, containers, and Lambdas**  
+- **Opens every package, script, and library**  
+- **Cross-references each one** against a global book of known vulnerabilities (**CVE** database)
 
-- **What it found**
-- **How bad it is (severity)**
-- **Where it is (which EC2/container)**
-- **How to fix it (remediation)**
+He finds **Apache 2.4.49** running on an EC2 instance and says:
 
-## **Real-World Analogy**
+> “Uh-oh, that version has a **path traversal** bug. That’s a **critical vulnerability**.”
 
-Imagine you're managing a fleet of rental cars.
+Then hands you a report with:
 
-Every car you have has:
+- **What was found**  
+- **Where it was found**  
+- **How bad it is (Severity Score)**  
+- **How to fix it**
 
-- Its own engine parts
-- Brakes, software systems, etc.
+### **Real World Analogy**
 
-Now a global automotive authority announces that:
+Imagine managing a **fleet of rental cars**.  
+Each car has different:
 
-> “Brake System 2.0 has a major defect that could cause accidents.”
+- **Engine parts**  
+- **Software** (navigation, auto-braking)  
+- **Brake systems, airbags**, etc.
 
-**AWS Inspector is like your automated mechanic**, who:
+Now imagine an **auto-safety authority** says:
 
-- Checks every car in your fleet **every day**
-- Sees if Brake System 2.0 is in any of your cars
-- Flags it if it's present
-- Rates how urgent it is to fix
-- Tells you exactly how to replace or patch it
+> “**Brake System v2.0** has a **critical defect** — urgent recall.”
+
+**AWS Inspector** is like your **personal mechanic** that:
+
+- **Checks every car daily**  
+- **Flags** ones with **Brake System v2.0**  
+- **Labels severity** (critical, high, medium)  
+- **Tells you exactly** what to replace and **how soon**
 
 ---
 
 ## **What It Scans**
 
-Inspector scans the following:
+**Inspector covers the following resources:**
 
-### **1. EC2 Instances**
-- It reads your installed OS packages, software, and libraries.
-- It doesn't interrupt or slow down your EC2, it **reads** the **SSM (Systems Manager)** inventory data.
+### **Amazon EC2 instances**
+- Uses **Systems Manager (SSM)** to read installed software  
+- Checks **OS packages, libraries, and app dependencies**  
+- **No performance impact**, since it uses **inventory metadata**
 
-### **2. Amazon ECR (Elastic Container Registry)**
-- It scans container images that are uploaded or already in the registry.
-- It checks for vulnerable libraries inside images.
+### **Amazon ECR (Elastic Container Registry)**
+- **Scans container images** when they’re pushed or already stored  
+- Digs into the **image layers** to find **libraries with vulnerabilities**
 
-### **3. Lambda Functions**
-- Scans Lambda function code and any layers (external packages).
-- Checks for vulnerable packages, like outdated **NumPy**, **Boto3** etc.
+### **AWS Lambda functions**
+- Scans **Lambda function code** and **external layers**  
+- Flags issues like **outdated boto3, numpy**, etc.
 
 ---
 
 ## **How It Works**
 
-### **1. Inventory Collection (via SSM)**
-For EC2 instances, Inspector uses **AWS SSM (Systems Manager)** to gather information about installed software.
+### **1) Inventory Collection (via SSM)**
+- **For EC2:** Inspector uses **SSM Agent** to gather a **software inventory**.  
+- **For Lambda:** it reads the **code and dependencies**.  
+- **For ECR:** scans the **image layers**.
 
-### **2. Constant Scanning (Event-Based & Daily)**
-- New EC2 instance? **Scanned automatically.**
-- New container image pushed? **Scanned automatically.**
-- New Lambda published? **Scanned automatically.**
-- It also **rescans EC2 and Lambda resources daily** for new **CVE's**.
+### **2) CVE Matching**
+Inspector matches what it finds to the **National Vulnerability Database (NVD)**.  
+It checks:
 
-### **3. CVE Matching**
-Inspector matches the inventory data against the **National Vulnerability Database (NVD)**, a database of all known **Common Vulnerabilities and Exposures (CVEs)**.
+- **CVE ID** (e.g., **CVE-2025-12345**)  
+- **CVSS Score** (severity: **Critical, High, Medium, Low**)  
+- **Description** of the exploit  
+- **Fix availability**
 
-### **4. Finding Generation**
+### **3) Continuous Scanning (event + scheduled)**
+- When a **new resource is created** (EC2, Lambda, image upload) — Inspector **scans immediately**.  
+- Then **re-scans daily** to catch **new CVEs**.
+
+### **4) Finding Generation**
 When a match is found:
-- Inspector generates a **Finding**
-- Assigns a **CVSS-based** Severity Score
-- **Suggests** Remediation Steps
-- Sends the Finding to **Security Hub** (if integrated)
 
-If needed here is an explanation on **CVE's** and **CVSS**:
+- It **creates a Finding**  
+- **Assigns a severity** based on **CVSS Score**  
+- **Suggests remediation steps**  
+- Optionally **sends alerts** to:
+  - **AWS Security Hub**  
+  - **EventBridge**  
+  - **SNS, Lambda**, etc.
 
-| **CVE** | **CVSS** |
+---
+
+## **CVE and CVSS Refresher**
+
+| **Term** | **What it is** |
 |---|---|
-| **CVE** stands for *Common Vulnerabilities and Exposures*, it's like a “known vulnerability encyclopedia.” | **CVSS** stands for *Common Vulnerability Scoring System*, it scores vulnerabilities to put simply. |
-| Each **CVE** has an ID (e.g., **CVE-2025-12345**) and a severity score. | Score from **0.0 to 10.0**, the higher the number the worse the **CVE** is. <br> • **9.0 – 10.0 = Critical** <br> • **7.0 – 8.9 = High** <br> • **4.0 – 6.9 = Medium** <br> • **0.1 – 3.9 = Low** |
+| **CVE (Common Vulnerabilities and Exposures)** | Every known software flaw gets a **CVE ID** (e.g., **CVE-2023-1234**). Think of it like a **bug ID** in a massive global **security bug tracker**. |
+| **CVSS (Common Vulnerability Scoring System)** | Scores the CVE from **0.0 to 10.0**. Inspector uses this score to **classify severity**. <br> **9.0–10.0 = Critical** <br> **7.0–8.9 = High** <br> **4.0–6.9 = Medium** <br> **0.1–3.9 = Low** |
 
 ---
 
 ## **Pricing Models**
 
-Inspector uses a **pay-as-you-go** model, there is no upfront cost. You're billed per resource scanned, every month.
+**AWS Inspector is usage-based** — you pay for:
 
-As of 2025, their pricing model is:
+- **Number of EC2 instances scanned monthly**  
+- **Number of Lambda versions scanned**  
+- **Number of container images scanned**
 
-| **Resource Type** | **Pricing Model** |
+**Here’s an idea of the pricing breakdown:**
+
+| **Resource Type** | **Pricing Basis**        |
 |---|---|
-| **EC2 Instances** | Charged **per instance scanned per month** |
-| **ECR Container Images** | Charged **per image scan** |
-| **Lambda Functions** | Charged **per function version scanned** |
+| **EC2**           | **Per instance per month** |
+| **Lambda**        | **Per function version scanned** |
+| **ECR**           | **Per image scanned** |
 
-> You can reduce costs by excluding resources you don't need to scan.
+**Example:**  
+If you have:
+
+- **10 EC2 instances**  
+- **5 Lambdas** (each with **2 versions**)  
+- **50 ECR images**
+
+You’re billed for:
+
+- **10 EC2 scans/month**  
+- **10 Lambda versions/month**  
+- **50 image scans**
+
+> **Cost saving tip:** You can **exclude non-production environments** or **specific resources** using **filters** to reduce scanning cost.
 
 ---
 
-## **Real-Life Example**
+## **Real Life Example**
 
-Imagine you launch a new EC2 instance called **"web-prod-us-east-1"** with **Ubuntu 22.04**.
+You spin up an EC2 instance named **prod-web-01** with:
 
-This instance you launched has **OpenSSH**, **Apache2**, and a few other packages installed.
+- **Ubuntu 22.04**  
+- **Apache HTTP Server v2.4.49**  
+- **OpenSSL**  
+- **PHP**
 
-1. Inspector **detects** the new EC2 via **Systems Manager**.  
-2. **Scans** the software list.  
-3. Notices **Apache** version **2.4.49**.  
-   - **Title:** “Apache HTTP Server Path Traversal Vulnerability”
-   - **Severity:** Critical
+You also **upload a container to ECR** and **update your Lambda function**.
 
-   - **Affected Resources:** EC2 instance ID
-   - **Remediation:** “Upgrade to Apache version 2.4.51 or later”
+**Here’s what happens:**
 
-You can then use **EventBridge** to automatically trigger:
-- A **Lambda** that isolates the EC2.
-- An **SSM Patch Manager** job that installs the update.
-- An **SNS** notification to alert your team.
+1. **Inspector detects** `prod-web-01` via **SSM**  
+2. **Scans** its software inventory  
+3. Finds **Apache 2.4.49** → links it to **CVE-2021-41773** *(real CVE: RCE via path traversal)*  
+4. **Generates a finding:**
+   - **Title:** *Apache Path Traversal RCE*  
+   - **Resource:** EC2 Instance **prod-web-01**  
+   - **Severity:** **Critical (CVSS 9.8)**  
+   - **Recommendation:** *Upgrade to Apache **2.4.51** or later*
 
+**Inspector sends this finding to:**
+
+- **Security Hub** *(if enabled)*  
+- **EventBridge** → **triggers Lambda** to **isolate the EC2**  
+- **SNS** → sends **SMS alert** to **SecOps**
+
+All of this is **automated** — **no manual scans**, **no third-party tools**.
 
 ---
 
 ## **Final Thoughts**
 
-**Inspector** is like your always-on vulnerability watchdog.  
-It does the repetitive, but vital work of checking every system, every day, against the world's list of known weaknesses.  
-In security, **speed matters**, and Inspector gives you the head start you need to stay ahead.
+**AWS Inspector** is your **cloud-native vulnerability watchdog**.  
+It saves you from:
 
+- **Manual scanning**  
+- **Outdated tools**  
+- **Delayed patching**
+
+Security today is about **speed** and **visibility** — **Inspector** gives you **both**.
+
+You can pair it with:
+
+- **GuardDuty** to **detect threats**  
+- **Macie** to **protect sensitive data**  
+- **AWS Config** to **enforce patch compliance**  
+- **Systems Manager Patch Manager** to **automate the fix**
+
+If you want **real security maturity** in AWS, **Inspector** is a **foundational** part of that journey. It’s **not just a box checker** — it’s your **early warning system** against the most common cloud attack vector: **know**
