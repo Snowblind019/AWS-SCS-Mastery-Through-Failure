@@ -1,265 +1,197 @@
-# **Amazon Macie**
+# AWS Macie
 
-## **What is the service (and why it’s important)**
+## What Is The Service
 
-**Amazon Macie** is a **fully managed data security and privacy service** that uses **machine learning** and **pattern matching** to **discover and protect sensitive data in Amazon S3**.
+Amazon Macie is AWS’s data security and privacy service for S3. It automatically **discovers**, **classifies**, and **protects** sensitive data (PII, financial, health, credentials, secrets) and surfaces **where that data lives**, **who can access it**, and **how risky the bucket’s posture is**. It’s built to answer the questions that keep teams up at night:
 
-It helps you find things like:
+- Where is our sensitive data actually stored?
+- Is any of it public or overly exposed?
+- What kinds of personal data do we hold, and in which regions/accounts/buckets?
+- What changed this week—and do we need to act?
 
-- **PII (Personally Identifiable Information)**
-- **PHI (Protected Health Information)**
-- **Financial data** (like **credit cards**, **SSNs**)
-- **API keys, passwords, private keys**
-- **Custom sensitive data types** *(you define them)*
+**Macie** does two big things well:
 
-**Macie is not a scanner for EC2 or infrastructure** — it is **laser-focused on S3 buckets**.
+1. **Sensitive data discovery** in S3 objects (full jobs or automated sampling), using a mix of **managed** and **custom data identifiers**.  
+2. **Bucket-level posture assessment** (public access, shared access, encryption status, policy risks), so you can spot “time bombs” even before scanning object contents.
 
-It answers:
-
-- “**Where is my sensitive data?**”
-- “**Is it in the right place?**”
-- “**Is it encrypted?**”
-- “**Who accessed it?**”
-- “**Did we accidentally make it public?**”
-
-In the cloud, **data is everything** — **Macie helps make sure you don’t lose control over it**.
+For **Snowy’s** teams, that means moving from “I think we’re fine” to **evidence-backed visibility**, then wiring findings into automated guardrails.
 
 ---
 
-## **Cybersecurity Analogy**
+## Cybersecurity And Real-World Analogy
 
-Imagine you work for a **law firm** with **thousands of filing cabinets** full of documents.
+**Security analogy.** Think of **Macie** like a confidential-documents unit in a security program:
 
-Now imagine this:
+- One crew **walks the halls** (your S3 estate) checking **doors and signs** (bucket access policies, encryption).  
+- Another crew **opens sample boxes** (automated discovery) and **audits contents** with a trained eye (data identifiers).  
+- When they find a box labeled “misc.zip” full of passports and **SSNs** in a shared closet, they **flag it** and **call the owner** with a remediation checklist.
 
-- Every night, a **robot librarian** walks through each cabinet  
-- **Opens each file**  
-- **Reads every page**  
-- Tries to **spot** things like **driver’s licenses**, **credit card numbers**, **social security numbers**, or **medical diagnoses**
+**Real-world analogy.** It’s inventory + inspection at a warehouse:
 
-If it finds something, it:
-
-- **Flags it**  
-- **Tells you exactly where it was**  
-- **Labels it by sensitivity**  
-- **Tells you if that drawer (S3 bucket) is locked or wide open**
-
-That’s **Amazon Macie**.  
-It’s your **robot librarian for S3** that’s trained to **spot sensitive documents**, **dangerous patterns**, and **open exposure** — and **report it back to you**.
+- The inventory board says what **aisles exist and who can enter** (bucket posture).  
+- Inspectors **spot-check** boxes to find mislabeled high-value items (sensitive data discovery).  
+- Findings turn into **tickets** so the right team re-shelves, locks, or repackages the goods.
 
 ---
 
-## **Real-World Analogy**
+## How It Works
 
-Imagine you’re the **compliance officer** at a **bank**.
+### Two modes of discovery
 
-You have:
+1. **Automated Sensitive Data Discovery (ASDD)**  
+   *Macie* continuously and intelligently **samples objects** across your S3 estate (per account/Region). It learns where your sensitive data tends to be, surfaces trends, and reduces the operational grind of scheduling scans everywhere. This is the “set it and keep watch” mode—great for ongoing posture awareness.
 
-- **50 rooms** of filing cabinets (**S3 buckets**)  
-- Each cabinet has **folders (objects)**
+2. **One-time or Scheduled Classification Jobs**  
+   You define **scope** (accounts, buckets, prefixes, tags), **filters** (file types, last-modified, size), and run targeted scans. Use this for:
+   - Mergers/audits,  
+   - Before enabling external sharing,  
+   - After incident indicators,  
+   - When a specific **Winterday** bucket smells risky.
 
-Some folders contain:
+**Result:** *Macie* produces **findings with location, type, examples (redacted), and owner context** so you can act.
 
-- **Social security numbers**  
-- **Credit card applications**  
-- **Bank routing info**
+## What Macie Looks For
 
-**Macie** is your **automated compliance officer** who:
+- **Managed data identifiers:** common **PII** (names, addresses, phone numbers), **national IDs** (e.g., SSNs), **financial** (credit cards, bank numbers), **healthcare** terms, **auth tokens** (access keys), **secrets** patterns, and more.  
+- **Custom data identifiers:** your own **regex + context** rules (e.g., *Winterday-CustomerID*, *Snowy-MemberCode*, internal invoice formats).  
+- **File types:** broad coverage (text formats, **JSON/CSV**, many office docs, PDFs, archives where supported). You can include/exclude types for cost and speed.  
+- **Allow lists** (via regular expressions or exact values) help suppress **known benign matches** (e.g., test **SSNs**) to reduce noise.
 
-- **Goes room to room**  
-- **Opens every folder**  
-- **Scans each document**  
-- **Highlights** ones that contain **sensitive data**
+## Bucket Posture & Exposure Analysis
 
-Tells you:
+*Macie* continuously evaluates:
 
-- “**This folder has a customer’s SSN and it’s sitting in a cabinet that’s not locked.**”  
-- “**This bucket has public read access and contains 200 files with credit card numbers.**”
+- **Public access** (ACLs, policies, Block Public Access state),  
+- **Shared access** (cross-account),  
+- **Encryption status** (default encryption, **KMS** usage),  
+- **Policy risks** (broad **Principal** or wildcard conditions).
 
-And you — the **security team** — can now **take action immediately**.
+You get **bucket-level findings** and an **estate view** so **Snowy** can prioritize *“Blizzard-Data-Share is public + unencrypted”* ahead of lower-risk issues.
 
----
+## Findings, Classification Details, And Triage
 
-## **What It Scans / What It Detects**
+*Macie* findings include:
 
-**Macie scans S3 buckets only** — it **does not** analyze **EC2, RDS, or other services**.
+- **Type** (`SensitiveData:S3Object` / `Policy:S3Bucket`),  
+- **Where** (account, Region, bucket, prefix, object),  
+- **What** (category and **count** of sensitive data types),  
+- **Samples** (contextual excerpts, masked),  
+- **Timestamps & owners** (bucket tags, AWS account).  
 
-### **Sensitive Data in S3 Objects**
-Built-in detection for:
+You can **publish findings** to **EventBridge**, pipe to **Security Hub**, notify via **SNS**, or hand them to **SSM Automation** for known fixes (e.g., lock down access, enable encryption, move the object).
 
-- **Name, Address, Phone Number**  
-- **SSN, Credit Card, Driver’s License**  
-- **AWS Keys, Secrets, Passwords**  
-- **Health info (PHI)**
+## Multi-Account, Multi-Region
 
-You can define **custom data identifiers** (e.g., your **internal employee ID** format).
-
-### **Bucket-Level Security Risks**
-
-- **Public access** (ACLs or bucket policy)  
-- **Unencrypted buckets**  
-- **Bucket sharing across accounts**
-
-### **Data Exposure Alerts**
-
-- “**This file contains SSNs and is accessible to everyone on the internet.**”
-
-### **Object Metadata**
-
-- **File type**  
-- **Size**  
-- **Encryption status**  
-- **Last modified**
-
-> **Note:** Macie does **not** read **every object by default** — you configure **scheduled jobs** to **scan what matters**.
+- Pick a **Macie administrator account** (e.g., *Snowy-Security*).  
+- Enroll **member accounts** (or integrate with AWS Organizations for auto-enrollment).  
+- Centrally manage **ASDD**, **jobs**, **findings**, and **suppression rules**.  
+- Mirror the setup across Regions where you store data.
 
 ---
 
-## **How It Works**
+## Pricing Model
 
-**Macie works in 3 major parts:**
+Keep this as a **shape** rather than memorizing numbers (pricing evolves):
 
-### **1) Inventory Monitoring**
+| Area                          | What drives cost                                  | Design guidance                                                                 |
+|------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------|
+| Automated Sensitive Data Discovery | Estate size (buckets/objects sampled) with tiered/object-based pricing | Use **ASDD** broadly for trend awareness; tune object sampling with scoping if needed. |
+| Classification Jobs          | **GB scanned** per job (data inspected)           | Target scans (prefix/tags/last-modified); exclude compressions/duplicates when possible. |
+| Bucket posture               | Usually included with **Macie enablement**        | Keep on; it’s cheap signal for high-value posture gaps.                          |
 
-- **Automatically finds all your S3 buckets**  
-- Checks for **public access, encryption, and logging**  
-- **Flags misconfigured buckets** — even **before** scanning any data
+## Cost Control Quick Wins
 
-### **2) Sensitive Data Discovery Jobs**
+- Start **ASDD** in prod and high-risk accounts first; expand as needed.  
+- Scope one-time jobs by **prefix/tags/last-modified** to avoid cold archives.  
+- Use **allow lists** and **custom identifiers** to reduce false positives and re-scans.  
+- Export **reports** and disable scans on buckets you’ve archived to Glacier Deep Archive.
 
-These are **scheduled or one-time jobs** you create. You select:
+## Comparisons You’ll Actually Use
 
-- **Which buckets or folders to scan**  
-- Whether to use **full scan** or **sampling**  
-- **Which sensitive data types** to look for
-
-**Macie then:**
-
-- **Reads the files** (object content)  
-- **Detects patterns**  
-- **Labels results**  
-- **Stores Findings** in Macie and **sends to EventBridge, SNS, or Security Hub**
-
-### **3) Findings and Actions**
-
-Every detection **creates a Finding**.  
-**Example:**
-
-- “**SensitiveData:S3Object/Personal**”  
-- “**S3 bucket is public and contains 74 credit card numbers**”
-
-You can:
-
-- **Trigger remediation** with **Lambda**  
-- **Notify via SNS**  
-- **Send to Security Hub**  
-- **Export to S3** for **archival**
+| Tool            | Best at                                      | How Macie fits                                                                 |
+|----------------|-----------------------------------------------|---------------------------------------------------------------------------------|
+| **GuardDuty**   | Threat **detections** (anomalies/IoCs over logs) | *Macie* focuses on **data classification & exposure** in S3; send findings into **Security Hub** alongside **GuardDuty**. |
+| **Security Hub**| Posture **aggregation** & standards scoring  | *Macie* feeds findings to **Hub**; Hub gives you a unified queue & workflows.  |
+| **Config**      | **Resource state** + compliance rules        | Use **Config** to enforce **encryption/BPA/tagging**; use *Macie* to prove content sensitivity. |
+| **Inspector**   | **Vuln scanning** (EC2/ECR/Lambda)           | Different layer: Inspector = compute/software; *Macie* = data.                 |
+| **Glue / Athena**| **ETL** & **query** data lakes              | Don’t use them to classify sensitive data. Use *Macie* first, then move/transform safely. |
 
 ---
 
-## **Clever Tech Underneath**
+## Operational & Security Best Practices
 
-- **Macie uses ML models + regex pattern matching**  
-- It **auto-classifies content**, even across file types (**CSV, TXT, DOCX, etc.**)  
-- If you use **encryption with KMS**, Macie can still scan, **provided it has access via KMS grants**
+1. **Turn on ASDD** in your prod and sensitive **Winterday** accounts/Regions first; watch trends for 2–4 weeks.  
+2. **Tag ownership** on buckets (`Service`, `DataOwner`, `PII`, `Retention`) so findings route to the right team.  
+3. **Build custom identifiers** for your domain (customer IDs, invoice numbers, internal forms). Pair with **allow lists** to mute known test data.  
+4. **Scope jobs tightly** for investigations: filter by **prefix, last-modified, file type, size**; avoid re-scanning stale archives unless required.  
+5. **Route findings** to **EventBridge → SSM Automation** for standard fixes (enable encryption, block public access, quarantine to a private bucket).  
+6. **Suppress noise** with time-boxed **suppression rules** (e.g., for sanctioned test buckets) and revisit them monthly.  
+7. **Measure posture:** track % of buckets with **BPA enabled**, % encrypted with **KMS**, and **open exposure** findings over time. Put these on a **Snowy-Data Security dashboard**.  
+8. **Treat PII in dev** like prod or redact it at ingestion. Create a *Macie* job that **fails the pipeline** if **PII** shows up in non-prod inputs.  
+9. **Document ownership & escalation:** when *Macie* finds **SSNs** in `Blizzard-raw-drops/`, who fixes it within 24h? Bake this into your **on-call runbooks**.  
+10. **Prove it for audits:** export *Macie* sensitive data discovery results and bucket posture reports monthly to **S3**; attach to audit evidence packs.
 
----
+## Findings You’ll See
 
-## **Pricing Model**
+| Category                | Example finding                          | Why it matters               | Typical action                                                  |
+|------------------------|-------------------------------------------|------------------------------|-----------------------------------------------------------------|
+| `SensitiveData:S3Object`| `Multiple.Personal` or `Credentials` in object | **PII/keys in the wild**     | Quarantine/move, notify owner, add deny policy, scrub/redact    |
+| `Policy:S3BucketPublic` | Public read/write or policy wildcard     | **External exposure risk**    | Enable **Block Public Access**, fix bucket policy/**ACL**       |
+| `Policy:S3BucketShared` | Cross-account overly broad               | **Data leakage across accounts** | Restrict principals, introduce access patterns (role assumption)|
+| `Policy:S3BucketEncryption` | Missing default encryption           | **At-rest exposure**         | Enforce **KMS** default encryption, rotate keys if needed       |
 
-**Macie pricing has two components:**
+## Real-Life Example
 
-| **Component**              | **Price**                    |
-|---------------------------|------------------------------|
-| **S3 Bucket Monitoring**  | ~**$0.10 per bucket per month** |
-| **Object Scanning (Classification Jobs)** | ~**$1.00 per GB scanned** |
+**Scenario.** A partner integration is about to pull weekly reports from `s3://blizzard-exports/reports/`.  
+Before granting access, **Snowy** wants assurance there’s no **PII** in that path and that the bucket isn’t exposed.
 
-That means:
+1. **Baseline posture**  
+   *Macie* shows Block Public Access: **enabled**, default encryption: **KMS**, no public or wildcard sharing on `blizzard-exports`. ✅ Good.
 
-- **Just turning on Macie doesn’t cost much**  
-- But **running a scan can get expensive** — so **scope your jobs wisely**
+2. **Targeted job**  
+   **Snowy** runs a **classification job** scoped to `reports/` with filters:
+   - Include: `*.csv`, `*.parquet`, `last-modified <= 30 days`  
+   - Exclude: files > `512 MB` (handled separately)  
+   - Custom identifier: `Winterday-CustomerID` (regex + context words)
 
-You can:
+3. **Findings**  
+   - One `SensitiveData:S3Object` finding flags **names + phone numbers** in `reports/2025-09-w38-raw.csv` (unexpected—should have been anonymized).  
+   - No credentials or national IDs detected.  
+   - No policy findings on the bucket.
 
-- **Scan only certain prefixes**  
-- **Enable sampling** *(vs full object scans)*  
-- **Use job scheduling** to reduce cost
+4. **Action**  
+   **EventBridge** routes the finding to **SSM Automation**:
+   - Quarantines the object to a **private quarantine bucket**  
+   - Notifies **Blizzard-Data** owner group with the **Macie** evidence excerpt  
+   - Opens a ticket to fix the **ETL** (apply anonymization before export)
 
-> **Also:** first **1 GB per month is free** for scanning *(subject to change).*  
+5. **Close the loop**  
+   The team patches **ETL**, re-runs the job, and *Macie* reports **no sensitive data** in `reports/`.  
+   The partner role is granted **prefix-scoped read access** with **KMS condition keys**.
 
----
+**Outcome:** Data was protected *before* external sharing; evidence is stored with the incident ticket for audit.
 
-## **Real-Life Example**
+### Scoping A Job
 
-Let’s say you have an S3 bucket called: **`customer-records-prod`**
+| Filter         | Why you use it              | Example                               |
+|----------------|-----------------------------|----------------------------------------|
+| Prefix         | Limit blast radius          | `s3://winterday-datalake/raw/2025/`   |
+| Tags           | Route by owner/domain       | `DataOwner = Blizzard-Finance`        |
+| File types     | Avoid binaries you don’t need| Include `CSV/JSON/PARQUET` only       |
+| Last-modified  | Focus on recent data        | `>= now() - 30d`                       |
+| Size bounds    | Keep scans fast             | `<= 512 MB` (large go to separate flow)|
 
-You launch a **Macie classification job** targeting that bucket.
+### Building Custom Identifiers
 
-**Here’s what happens:**
-
-- **Macie scans** all objects with **.csv, .txt, .json** in that bucket  
-- It **reads the content** and looks for:
-  - **Names**
-  - **SSNs**
-  - **Email addresses**
-  - **AWS keys**
-- It finds:
-  - **300 files** with **full names + SSNs**
-  - **2 files** with **exposed AWS access keys**
-
-It then **checks the bucket settings**:
-
-- **Bucket is not encrypted**  
-- **Public access block is not enabled**
-
-**Macie generates 2 Findings:**
-
-- **Sensitive data exposed in unencrypted bucket**  
-- **Bucket is accessible to other AWS accounts**
-
-**You:**
-
-- **Get an alert** in **Security Hub**  
-- Use **EventBridge** to **trigger a Lambda function**  
-  - **Removes public access**  
-  - **Encrypts bucket**  
-  - **Sends notification** to **SecOps**
-
-This is **automated compliance detection and reaction**.
-
----
-
-## **When to Use Macie**
-
-Use **Macie** when:
-
-- You **store customer data, financial records, or regulated info**  
-- You need to **comply** with:
-  - **GDPR**
-  - **HIPAA**
-  - **PCI DSS**
-- You want to know:
-  - **Where is our sensitive data?**
-  - **Who can access it?**
-  - **Is it at risk?**
-
-**Don’t use Macie:**
-
-- For **infrastructure scanning** *(use **Inspector**)*  
-- For **threat detection** *(use **GuardDuty**)*  
-- To **search CloudTrail logs** *(use **CloudTrail Lake**)*
-
-**Macie is about content classification and exposure detection.**
+| Element       | Purpose              | Example                                 |
+|---------------|----------------------|------------------------------------------|
+| Regex         | Match the token      | `\bSNOWY-\d{8}\b`                         |
+| Context words | Reduce false positives| “customer id”, “member id”, “account ref”|
+| Proximity     | Tighten match window | `± 50 chars`                             |
+| Allow list    | Exempt test values   | `SNOWY-00000000`                         |
 
 ---
 
-## **Final Thoughts**
+## Final Thoughts
 
-**Amazon Macie** is your **data privacy watchdog** in the cloud.  
-It **walks through your S3 storage** like a **data-loss prevention expert**, **finds sensitive material**, and **tells you** when it’s **exposed** or **stored incorrectly**.
-
-It combines **machine learning**, **pattern recognition**, and **automated alerting** to help you avoid headlines like:
-
-> “**Company leaks 100,000 SSNs via public S3 bucket.**”
-
-**Macie** doesn’t just help you **be compliant** — it helps you **be secure by default**, and **accountable for your data**.
+*Macie* is how you **turn uncertainty into facts** about your S3 data. With **automated discovery** running as a background radar and **targeted jobs** for the risky corners, you get continuous signal on **what’s sensitive, where it lives, and how exposed it is**.  
