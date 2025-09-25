@@ -1,164 +1,222 @@
-# **AWS Detective**
+# AWS Detective
 
-## **What is the service (and why it’s important)**
+## What Is The Service
 
-**AWS Detective** is a **cloud-native investigation tool** that helps you analyze and understand **security events** across your AWS environment. It **doesn’t alert you** (like **GuardDuty**), and it **doesn’t block or patch** anything (like **WAF** or **Inspector**). Instead, it helps you **investigate** — piecing together clues from logs, graphs, and timelines to answer questions like:
-
-- **What happened to this compromised IAM user?**
-- **How did this EC2 instance get accessed?**
-- **Where did this API call come from?**
-- **Which resources were involved in this incident?**
-
-**Detective** builds **visual timelines** and **graphs of activity** so you can trace relationships across **accounts, users, IPs, VPCs, and workloads**.  
-It’s especially valuable for **security analysts** and **incident responders**, who need **context and correlation** — not just raw alerts.
+Amazon Detective is the place you go **after an alert** to answer the questions that actually matter: *what really happened, how far did it spread, who touched what, from where, and what should we do next?* It automatically ingests **CloudTrail**, **VPC Flow Logs**, **EKS audit logs**, and **GuardDuty** findings, then builds a **behavior graph**—a linked dataset of principals, resources, **IPs**, user agents, **geos**, and timelines you can pivot through fast.  
+The result: you click into an entity profile (an **IAM** role, an EC2 instance, an IP, a user), see context over time, and either verify a threat or disprove it with evidence.  
+That’s the difference between *“we think it’s bad”* and *“it was bad, here’s the blast radius and the exact API calls.”*
 
 ---
 
-## **Cybersecurity and Real World Analogy**
+## Cybersecurity And Real-World Analogy
 
-### **Cybersecurity Analogy**
-Imagine you get a **GuardDuty** alert: “**IAM user has anomalous API activity.**”  
-With **Detective**, you click the user and instantly see:
+### Security analogy
 
-- **When they logged in**
-- **What API calls they made**
-- **What resources they touched**
-- **What roles they assumed**
-- **What IP addresses they used**
-- **Whether they launched EC2, touched S3, or changed VPCs**
+Picture **Snowy** walking onto the SOC floor after **Blizzard-OnCall** gets paged. **GuardDuty** already raised a finding, but the team needs the story, not just the title.  
+**Detective** is the investigator’s board: strings between pins, timestamped photos, phone records, door swipes.  
+You click the principal, and the board re-arranges: **new geolocations**, **new user agents**, **new ASOs**, **related findings**, and **activity sequences**.  
+You can tell if this is a noisy spike or a real intrusion creeping across roles and **subnets**.
 
-This **saves hours of log digging**.
+### Real-world analogy
 
-### **Real World Analogy**
-Imagine you’re a **detective** investigating a **break-in** at a house.  
-You don’t just want the security camera footage that said “someone broke in.” You want:
+Think of an aircraft incident review.
 
-- **Timeline** of when each door was opened  
-- **Which rooms** were entered  
-- **Who else** entered the house that day  
-- **Phone calls** or **alarms** made during the incident  
-- **Who the suspect interacted with**
-
-**AWS Detective** gives you that **timeline, relationship map, and evidence trail** — but for your **AWS account**.
+- **CloudWatch** is the cockpit gauges during the flight.  
+- **Config** is the maintenance log.  
+- **Detective** is the **post-flight investigation kit**—the flight data recorder and a replay tool that shows **who did what, when, and against which systems**, with the ability to pause on any second and zoom into a specific control input.
 
 ---
 
-## **How it works / what it does**
+## How It Works
 
-### **Ingests and analyzes logs automatically**
-**Detective pulls in:**
+### The Behavior Graph
 
-- **VPC Flow Logs** (network traffic)  
-- **AWS CloudTrail** (API calls)  
-- **Amazon GuardDuty findings**
+Detective **collects and links** data from your accounts into a **graph**: nodes (identities, **IPs**, instances, pods, sessions) and edges (API calls, network connections, relationships).  
+It applies **ML**, stats, and graph analysis so you can pivot:
 
-You **don’t need to manually enable or parse** these logs — **Detective consumes and processes** them automatically once enabled.
+- from a finding  
+- → to a role  
+- → to its API calls  
+- → to a new IP and **geo**  
+- → to an EC2 instance it touched  
+- → to other findings that share those elements.  
 
-### **Creates a behavioral graph database**
-All ingested data is **organized into a graph**:
+This is **investigation at click speed** rather than grep speed.
 
-- **Nodes:** resources (**IAM users, IP addresses, EC2 instances**, etc.)  
-- **Edges:** relationships (**who accessed what, when, from where**)  
+### Data Sources
 
-This graph is **continuously updated** and **stored for 365 days**.
+- **AWS CloudTrail** – management & data events (who called what).  
+- **Amazon VPC Flow Logs** – network conversations (who talked to whom).  
+- **Amazon EKS audit logs** – Kubernetes control-plane events (who did what in the cluster).  
+- **Amazon GuardDuty** – findings feed that kicks off many investigations.  
 
-### **Correlates events and builds profiles**
-**Detective** automatically builds **profiles** for every entity (user, IP, instance, etc.):
+Detective keeps **up to a year** of aggregated investigation data (not your raw logs) for fast pivots and entity profiles.
 
-- **What was normal** for this entity (usual logins, API calls)  
-- **What changed recently** (new regions, higher access patterns)  
-- **What other entities** it interacted with
+## Entity Profiles, Timelines, And Finding Groups
 
-### **Interactive investigation dashboards**
-For any AWS resource (e.g., a **suspicious EC2** or **IAM user**), you can:
+- **Entity profiles.** One page per thing you care about (**IAM** user/role, EC2, IP, account).  
+  You see **activity volume charts**, **unusual geographies**, **new user agents**, and **related findings**—handholds for hypothesis testing (*“was this role ever used from that country before?”*).
 
-- **View timeline** of **API activity**  
-- **See network traffic** in/out of the instance  
-- **See which users or roles were assumed**  
-- **Compare recent behavior vs normal**  
-- **Drill down** to other **related entities** (pivoting)
+- **Timelines.** **Scrollable, filterable** windows around the suspicious period to line up API calls, network flows, and cluster events as a single sequence.
 
-It’s **click-through visual evidence** for **root cause analysis**.
+- **Finding groups.** Detective **clusters related findings** that likely describe one incident (one campaign, many symptoms).  
+  This removes the “whack-a-finding” problem and gives you a bundled case to review and close.
 
----
+## Detective Investigation
 
-## **Pricing Models**
+**Detective Investigation** adds **prebuilt analyses** for common threat patterns so you can ask richer questions with fewer clicks:
 
-**AWS Detective pricing** is based on the **amount of data it ingests per GB**.
+- impossible travel  
+- suspicious **IAM** activity  
+- flagged **IP** addresses  
+- finding-group triage  
 
-| **Source Data Type**                                           | **Approximate Price**          |
-|----------------------------------------------------------------|--------------------------------|
-| **Ingested log data** (CloudTrail, VPC Flow Logs, GuardDuty)   | ~**$2.00 per GB per month**    |
+It runs **ML + threat intel** over your behavior graph to highlight **IOCs** and anomalies tied to a principal or finding.
 
-There are **no upfront costs** and **no charges** for **queries, dashboards, or retention**.  
-**Detective stores and visualizes 12 months of data** without extra cost.
+> Practically, this means **Snowy** can open an **IAM** role and immediately see  
+> *“this role started from a new geo + new ASO + burst in API categories”*  
+> with links to all evidence.
 
-**Cost-saving tips:**
+## Admin Model And Org Scale
 
-- **Use in regions/accounts** where investigations matter  
-- **GuardDuty and CloudTrail** generate lots of data — **enable selectively** if needed  
-- **Estimate costs** via **AWS Pricing Calculator** before full rollout
+- **Administrator & members.** You pick a **Detective administrator** account; other accounts become **members** whose data feeds the same graph.  
+  This gives you **one pane** to investigate across the **Winterday** organization.
 
----
+- **Usage & cost view.** The admin can view **ingested volume by source** and **by member account**, and see a **30-day cost projection** for the whole graph.  
+  Useful for **chargeback** and early cost control.
 
-## **Other Explanations (if needed)**
-
-### **Detective is not a SIEM or alerting system**
-It’s important to know that:
-
-- It **does not send alerts**  
-- It **does not detect threats** on its own  
-- It **doesn’t have custom queries or rules** like a traditional SIEM
-
-Instead, it’s **purpose-built for incident response**:
-
-- You **start with an alert** (ex: from **GuardDuty**)  
-- You **investigate with Detective**  
-- You **uncover relationships** and answer the **“what happened?”** question
-
-### **Tightly integrated with other AWS services**
-**Detective** works especially well with:
-
-- **GuardDuty** → alerts **send you into Detective**  
-- **Security Hub** → **finding cards link directly** into Detective  
-- **IAM and EC2 Console** → **pivot** from specific users/instances to investigate
+- **GuardDuty integration.** Turn on **Detective + GuardDuty** and they **integrate automatically**;  
+  **GuardDuty findings** start flowing into the graph immediately.
 
 ---
 
-## **Real Life Example**
+## Pricing Model
 
-Let’s say you’re on the **security team** at a **fintech startup**.  
-One morning, **Security Hub** flags a **high-severity GuardDuty finding**:
+You pay **per GB ingested** into the behavior graph, **per account/Region**, with tiered pricing.  
+There’s **no extra charge** for the investigation UI or for storing the aggregated investigation data (**Detective retains up to 12 months**).
 
-> “**IAM User JohnDoe has credentials exfiltrated and is using API in unusual region.**”
+> Current tiers (per GB) start at $2.00 for the first 1,000 GB/account/Region/month, then drop across higher tiers.
 
-You jump into **Detective**:
+**Data sources counted:** CloudTrail, VPC Flow Logs, EKS audit logs, GuardDuty findings (and certain findings ingested via Security Hub).
 
-1. Click **“Investigate in Detective.”**  
-2. See **JohnDoe’s timeline**: he normally operates from **US West**, but this time from **Russia**.  
-3. View **API calls**: he **created new EC2 instances**, **downloaded S3 objects**.  
-4. See **relationships**: instances launched in **new region**, traffic from **new IPs**.  
-5. Realize he also **assumed a role** used by your **billing team**.
+| Cost driver     | What counts                                    | Tips                                                                 |
+|------------------|------------------------------------------------|----------------------------------------------------------------------|
+| Ingested GB      | CloudTrail, VPC Flow, EKS audit, GuardDuty findings | Control upstream volume; disable noisy sources you don’t need in non-prod. |
+| Accounts/Regions | Charged per account/Region                    | Centralize Regions; limit Regions in use for prod.                  |
+| Retention        | 12 months (aggregated) included               | You don’t pay extra for this in Detective; raw logs retention lives in their native services. |
 
-With all that context:
+> **Rule of thumb:** keep Detective on for prod and sensitive **dev**, and shape cost by managing **upstream log volumes** and **Regions**.
 
-- You immediately **disable the user**  
-- **Rotate credentials**  
-- Start **forensic investigation**  
-- **Audit** the **S3 bucket** downloads  
-- **Notify impacted customers**
+## Operational And Investigation Workflow
 
-**Without Detective**, you’d be **sifting through CloudTrail logs line-by-line**. It would take **hours or days**.  
-**With Detective**, you **visualize the entire attack timeline** in **minutes**.
+1. **Start in the finding.**  
+   Open the **GuardDuty** finding; hit *“Investigate in Detective.”* The context page loads with the principal, IP, or instance already centered.
+
+2. **Scan the indicators.**  
+   Look for **new geos, new ASOs, new user agents, and activity spikes** in the timeline around the alert. These are quick reality checks for compromise.
+
+3. **Pivot deliberately.**  
+   From the role → its recent API calls → the **IPs** and **geos** → to the EC2 instances touched → to related findings in the finding group.  
+   This draws a clean blast radius.
+
+4. **Confirm or kill the hypothesis.**  
+   If the signals line up (e.g., *impossible travel + new ASO + unusual API categories*), escalate;  
+   if not, document why it’s benign and close with evidence.
+
+5. **Feed remediation.**  
+   For confirmed incidents, hand off to **EventBridge/SSM runbooks** (disable keys, detach policies, block **IPs**, quarantine instances).
+
+6. **Export + lessons.**  
+   Screenshot key visuals, capture the sequence, and update **Blizzard-Runbooks** or **Winterday-Detections** with the new pattern.
+
+## Comparisons You’ll Actually Use
+
+| Tool                    | What it’s best at                                | How Detective fits                                                                 |
+|-------------------------|--------------------------------------------------|-------------------------------------------------------------------------------------|
+| **GuardDuty**           | Managed **detections** (threat intel + ML over logs). | **Detective** is the **investigation layer** you jump into after a **GuardDuty** alert to verify and scope. |
+| **CloudWatch**          | **Signals** (metrics/logs/alarms) and real-time ops.  | Use it to see performance impact; **Detective** to reconstruct actor/resource behavior. |
+| **Config**              | **What changed** (resource state & compliance).      | Pair with **Detective** to explain *who used the misconfig and how it was exploited*. |
+| **CloudTrail Lake/Log** | **Raw log search** & long retention.                 | Use for deep-dive queries/retention; **Detective** is faster for **entity-centric pivots**. |
+
+## Best Practices
+
+- **Enable Detective org-wide** (at least prod + security-critical **dev**).  
+  You can still scope which **sources** to include by account/Region to manage cost.
+
+- **Keep GuardDuty on.**  
+  Many investigations start there; integration is automatic.
+
+- **Name owners for roles** (tags) so entity profiles immediately map to a team  
+  (e.g., `Service=Blizzard-Checkout`, `Owner=Winterday`).
+
+- **Standardize session tagging** (`aws:SourceIdentity`, `sts:TagSession`)  
+  so **Detective’s** role views align with human change tickets.
+
+- **Reduce upstream noise:** prune **VPC Flow** scope in sandbox accounts;  
+  keep **EKS** audit logging focused (avoid ultra-verbose categories in **dev** clusters).
+
+- **Practice game days.**  
+  Stage a benign *“impossible travel”* or a noisy token **exfil** lab;  
+  time the path from finding → **Detective** → blast radius → remediation **runbook**.
+
+- **Track usage & cost.**  
+  The **Usage** page shows ingested GB by source/account and 30-day projections—use it for **showback** and tuning.
 
 ---
 
-## **Final Thoughts**
+## Real-Life Example
 
-**AWS Detective isn’t about prevention or detection** — it’s about **answering questions after something suspicious happens**.  
-It gives you the **forensic tooling** to **investigate, correlate, and understand** security incidents **at scale** — **without** building complex **log pipelines** or **dashboards** yourself.
+**Scenario.** A **GuardDuty** alert fires:  
+*“Anomalous IAM activity: possible credential compromise for role Blizzard-Deploy@prod.”*
 
-It’s especially powerful for **incident responders**, **security engineers**, and **SOC analysts** who need **evidence-based, time-based, and relationship-based visibility** — **fast**.  
-It helps you go from **“an alert happened”** to **“here’s what happened, when, how, and what else was affected.”**
+1. **Open in Detective.**  
+   The role’s **entity profile** shows a **sudden spike in API categories** around 02:11 UTC, plus new **geolocation** (country we’ve never seen for this role) and a **new user agent**.  
+   **Finding group** lists three related alerts (unusual S3 reads, `iam:List*` sprawl, and EC2 Describe bursts).
 
-If you're in an environment with **GuardDuty**, **Security Hub**, or **high compliance needs**, **Detective is a force multiplier**.
+2. **Pivot by IP.**  
+   The profile shows source IP `203.0.113.77`, new **ASO** for the account.  
+   We pivot into that IP and see connections to two EC2 instances in a **public subnet** during the same window.
+
+3. **Scope the blast radius.**  
+   Timeline view shows the role touching `Winterday-Orders` and `Snowy-Data-Share` buckets with list/get attempts,  
+   then failing to assume a higher-privileged role (blocked by boundary).
+
+4. **Decide and act.**  
+   Multiple “new” indicators + breadth of access attempts → escalate.  
+   **EventBridge** triggers **SSM Automation**: revoke the role’s session permissions, rotate related **Secrets Manager** keys, and quarantine the two EC2 instances with a restrictive **SG**.
+
+5. **Close with evidence.**  
+   We capture the **Detective visuals** (new **geo**, new **ASO**, activity burst, related findings) and paste into the incident doc.  
+   Postmortem: add a **condition on the trust policy** requiring `aws:SourceIdentity` and enforced **MFA** for human-federated paths;  
+   add a **GuardDuty suppression rule** to carve known noise; keep **Detective** as the standard triage entry.
+
+> **Outcome:** verified compromise attempt, bounded blast radius, precise evidence trail for leadership and auditors, and clear follow-up controls.
+
+## Pricing Snapshot
+
+**Current public pricing (example Region):**
+
+- **First 1,000 GB/account/Region/month** → $2.00/GB  
+- **Next 4,000 GB** → $1.00/GB  
+- **Next 5,000 GB** → $0.50/GB  
+- **Over 10,000 GB** → $0.25/GB
+
+> Detector stores **12 months** of investigation data; you don’t pay extra for the UI or those aggregates.  
+> Plan spend by shaping **upstream logs** and **which accounts/Regions** feed the graph.
+
+---
+
+## Final Thoughts
+
+**Amazon Detective** is the **post-alert truth machine**:  
+it turns raw log **firehoses** into an **investigable graph** you can walk like a map.
+
+For **Snowy** and team, the cadence becomes sane:
+
+- the alert lands,  
+- you pivot through context (principals, **IPs**, **geos**, **API categories**),  
+- confirm or kill the hypothesis in minutes,  
+- and hand a clean **blast radius** to remediation.
+
+Keep **GuardDuty** on, wire **Detective** across the **Winterday** org, tag your world, and rehearse a couple of common patterns.  
+When the wind picks up, you’ll have the map, not just an address.
