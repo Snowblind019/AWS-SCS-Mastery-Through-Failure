@@ -231,5 +231,3 @@ A new `Winterday-Orders` release is ready. CI succeeds, but Inspector (**ECR**) 
 
 **Amazon Inspector** is your **always-on CVE radar** for EC2, containers, and Lambda.  
 Use it to **rank risk sanely** (exploitability + exposure), **push fixes automatically** (**SSM**, rebuilds, layer bumps), and **prove closure** via Security Hub.
-
-Keep images small, patch EC2 on rails, centralize Lambda layers, and let Inspector watch the rest. Done this way, **Snowy’s stack** spends less time vulnerable and more time boring—in the best, sleep-thro

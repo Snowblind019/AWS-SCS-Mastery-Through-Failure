@@ -255,5 +255,3 @@ sts:AssumeRole(
 
 **IAM** is where you make **security a property of design** instead of an afterthought.  
 Prefer **assumable roles** and **short-lived sessions**; shape access with **tags and conditions**; place **explicit denies** and **SCP guardrails** on the sharp edges; and validate continuously with **Access Analyzer** and logs.
-
-Do this, and **Snowy’s estate becomes predictably safe**: credentials don’t linger, permissions fit the job, and the few doors that truly must stay locked… stay locked, no matter how hard the wind howls.

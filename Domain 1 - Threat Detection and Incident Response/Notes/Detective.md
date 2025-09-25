@@ -210,13 +210,3 @@ There’s **no extra charge** for the investigation UI or for storing the aggreg
 
 **Amazon Detective** is the **post-alert truth machine**:  
 it turns raw log **firehoses** into an **investigable graph** you can walk like a map.
-
-For **Snowy** and team, the cadence becomes sane:
-
-- the alert lands,  
-- you pivot through context (principals, **IPs**, **geos**, **API categories**),  
-- confirm or kill the hypothesis in minutes,  
-- and hand a clean **blast radius** to remediation.
-
-Keep **GuardDuty** on, wire **Detective** across the **Winterday** org, tag your world, and rehearse a couple of common patterns.  
-When the wind picks up, you’ll have the map, not just an address.

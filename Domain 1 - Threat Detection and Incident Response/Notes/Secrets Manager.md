@@ -217,4 +217,4 @@ Use:
 - `CloudWatch` / `CloudTrail` + alerts  
 - Guardrails that page **Snowy-OnCall**
 
-**Secrets become boring, reliable, and loud when broken.**v
+**Secrets become boring, reliable, and loud when broken.**
