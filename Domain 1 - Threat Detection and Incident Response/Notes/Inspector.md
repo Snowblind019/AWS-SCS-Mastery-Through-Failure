@@ -1,211 +1,235 @@
-# **AWS Inspector**
+# Amazon Inspector
 
-## **What is the service (and why it’s important)**
+## **What Is the Service**
 
-**AWS Inspector** is an **automated vulnerability scanner** for your cloud infrastructure. It continuously assesses the security of your:
+**Amazon Inspector** is AWS’s *managed vulnerability scanner for your compute*: it continuously evaluates **EC2 instances**, **container images in Amazon ECR**, and **AWS Lambda** functions/layers for **known software vulnerabilities (CVEs)** and related risks. It tracks what packages you’re running, correlates them with vulnerability intelligence, and prioritizes findings so you can fix the right things first.  
+No cron jobs, no fleet daemons to hand-tune—turn it on, scope what to cover, and Inspector keeps watching as code, images, and functions change.
 
-- **Amazon EC2** instances  
-- **Container images in Amazon ECR**  
-- **AWS Lambda** functions  
-
-Its job is to find known vulnerabilities, such as:
-
-- **Unpatched software**  
-- **Outdated libraries**  
-- **Dangerous misconfigurations**
-
-It helps you **find these issues before attackers do**.
-
-**Why it matters:**  
-Modern attackers don’t always brute-force. They **scan for soft targets** — services with known **CVEs (Common Vulnerabilities and Exposures)**. **Inspector** constantly checks your environment against public vulnerability databases and gives you a **report you can act on**.
+**Why It Matters:** real incidents often begin with **unpatched software**. A forgotten library in `Blizzard-Checkout`, a base image in `Winterday-Orders` that quietly went stale, a Lambda layer with a vulnerable parser—these are the doors attackers try first. Inspector shortens the **“known vulnerable → exploitable in your estate”** window and **pushes the right fixes to the right owners** with evidence you can track.
 
 ---
 
-## **Cybersecurity and Real World Analogy**
+## **Cybersecurity and Real-World Analogy**
 
-### **Cybersecurity Analogy**
+### **Security Analogy**
 
-Imagine you hire a full-time **security guard** who:
+Picture the **Winterday** campus with maintenance tags on equipment. **Inspector** is the **automated safety inspector** who walks the floors every day, scans serial numbers, checks them against a global “bad parts” list, and posts **priority work orders**:
 
-- **Walks through your servers, containers, and Lambdas**  
-- **Opens every package, script, and library**  
-- **Cross-references each one** against a global book of known vulnerabilities (**CVE** database)
+> “Replace this valve now (*actively exploited*), that one next sprint (*low likelihood*).”
 
-He finds **Apache 2.4.49** running on an EC2 instance and says:
+It doesn’t replace alarms (**GuardDuty**) or door logs (**CloudTrail**); it keeps **known weaknesses** from sitting around.
 
-> “Uh-oh, that version has a **path traversal** bug. That’s a **critical vulnerability**.”
+### **Real-World Analogy**
 
-Then hands you a report with:
+Car recall notices. The manufacturer discovers a defect in a specific batch of parts (**CVE**). Inspector checks your “garage” and says:
 
-- **What was found**  
-- **Where it was found**  
-- **How bad it is (Severity Score)**  
-- **How to fix it**
-
-### **Real World Analogy**
-
-Imagine managing a **fleet of rental cars**.  
-Each car has different:
-
-- **Engine parts**  
-- **Software** (navigation, auto-braking)  
-- **Brake systems, airbags**, etc.
-
-Now imagine an **auto-safety authority** says:
-
-> “**Brake System v2.0** has a **critical defect** — urgent recall.”
-
-**AWS Inspector** is like your **personal mechanic** that:
-
-- **Checks every car daily**  
-- **Flags** ones with **Brake System v2.0**  
-- **Labels severity** (critical, high, medium)  
-- **Tells you exactly** what to replace and **how soon**
-
----
-
-## **What It Scans**
-
-**Inspector covers the following resources:**
-
-### **Amazon EC2 instances**
-- Uses **Systems Manager (SSM)** to read installed software  
-- Checks **OS packages, libraries, and app dependencies**  
-- **No performance impact**, since it uses **inventory metadata**
-
-### **Amazon ECR (Elastic Container Registry)**
-- **Scans container images** when they’re pushed or already stored  
-- Digs into the **image layers** to find **libraries with vulnerabilities**
-
-### **AWS Lambda functions**
-- Scans **Lambda function code** and **external layers**  
-- Flags issues like **outdated boto3, numpy**, etc.
+> _“Snowy, your 2019 model with build XYZ needs a fix; here’s where it is and how urgent.”_
 
 ---
 
 ## **How It Works**
 
-### **1) Inventory Collection (via SSM)**
-- **For EC2:** Inspector uses **SSM Agent** to gather a **software inventory**.  
-- **For Lambda:** it reads the **code and dependencies**.  
-- **For ECR:** scans the **image layers**.
+### **Coverage at a Glance**
 
-### **2) CVE Matching**
-Inspector matches what it finds to the **National Vulnerability Database (NVD)**.  
-It checks:
+| **Surface**     | **What Inspector Scans**                  | **How It Collects Data**                                     | **Typical Triggers**                                                             |
+|-----------------|-------------------------------------------|---------------------------------------------------------------|----------------------------------------------------------------------------------|
+| **EC2**         | OS packages, language runtimes, common libs | **SSM Agent** inventory + service-side analysis (no separate agent) | On instance start/stop, package changes, scheduled refresh                        |
+| **ECR (Containers)** | Image layers (OS + language deps)        | Event-driven at push + periodic re-scan of existing images     | Push to ECR, new **CVE** published, **repo** policy change                        |
+| **Lambda**      | Function code and layers (packaged libs)   | Service-side analysis of artifacts                             | On publish/update, new **CVE**, layer change                                     |
 
-- **CVE ID** (e.g., **CVE-2025-12345**)  
-- **CVSS Score** (severity: **Critical, High, Medium, Low**)  
-- **Description** of the exploit  
-- **Fix availability**
+### **Finding Anatomy**
 
-### **3) Continuous Scanning (event + scheduled)**
-- When a **new resource is created** (EC2, Lambda, image upload) — Inspector **scans immediately**.  
-- Then **re-scans daily** to catch **new CVEs**.
+_All targets_:  
+- **CVE ID**  
+- Affected package & version  
+- Path/layer  
+- **Severity**, **exploit context**, **remediation guidance** (fixed version or mitigation)  
+- Affected resources
 
-### **4) Finding Generation**
-When a match is found:
+## **Prioritization (Why Some Findings Matter More)**
 
-- It **creates a Finding**  
-- **Assigns a severity** based on **CVSS Score**  
-- **Suggests remediation steps**  
-- Optionally **sends alerts** to:
-  - **AWS Security Hub**  
-  - **EventBridge**  
-  - **SNS, Lambda**, etc.
+Inspector doesn’t just say *“you have CVE-XXXX.”*  
+It scores findings to reflect **likelihood of exploit** + **exposure**, so **Snowy** works on the right issues first.
 
----
+**Inputs commonly include:**
+- ✅ **Exploit intel signals** (is there known active exploitation or a weaponized **PoC**?)
+- 🌐 **Network exposure context** for EC2 (publicly reachable vs private)
+- ⚙️ **Runtime relevance** (package present vs actually used, where available)
+- 📌 **Asset criticality** (you can feed tags/metadata to reflect importance)
 
-## **CVE and CVSS Refresher**
+> **Result**: a **sorted queue** where *High/now* often means *actively exploitable + internet-exposed*.
 
-| **Term** | **What it is** |
-|---|---|
-| **CVE (Common Vulnerabilities and Exposures)** | Every known software flaw gets a **CVE ID** (e.g., **CVE-2023-1234**). Think of it like a **bug ID** in a massive global **security bug tracker**. |
-| **CVSS (Common Vulnerability Scoring System)** | Scores the CVE from **0.0 to 10.0**. Inspector uses this score to **classify severity**. <br> **9.0–10.0 = Critical** <br> **7.0–8.9 = High** <br> **4.0–6.9 = Medium** <br> **0.1–3.9 = Low** |
+## **Inspector Findings Lifecycle**
 
----
+1. **Discovery** — Inspector detects packages/images/functions and maps them to known **CVEs**.  
+2. **Correlation & Scoring** — Applies **exploitability/context** signals; assigns severity & a ranked score.  
+3. **Delivery** — Findings surface in **Inspector**, **Security Hub (ASFF)**, and optionally **EventBridge**.  
+4. **Triage** — Filter by `Environment=prod`, `Service=Blizzard-Checkout`, severity, or tag.  
+5. **Remediation** — Patch OS, rebuild container base, bump Lambda layer; verify fixed version.  
+6. **Closure** — Inspector auto-resolves when the vulnerable version disappears from the asset.
 
-## **Pricing Models**
+## **Integrations That Matter**
 
-**AWS Inspector is usage-based** — you pay for:
-
-- **Number of EC2 instances scanned monthly**  
-- **Number of Lambda versions scanned**  
-- **Number of container images scanned**
-
-**Here’s an idea of the pricing breakdown:**
-
-| **Resource Type** | **Pricing Basis**        |
-|---|---|
-| **EC2**           | **Per instance per month** |
-| **Lambda**        | **Per function version scanned** |
-| **ECR**           | **Per image scanned** |
-
-**Example:**  
-If you have:
-
-- **10 EC2 instances**  
-- **5 Lambdas** (each with **2 versions**)  
-- **50 ECR images**
-
-You’re billed for:
-
-- **10 EC2 scans/month**  
-- **10 Lambda versions/month**  
-- **50 image scans**
-
-> **Cost saving tip:** You can **exclude non-production environments** or **specific resources** using **filters** to reduce scanning cost.
+- **Security Hub** — Central queue, standards scoring, custom actions to run playbooks.  
+- **EventBridge** — Route **High** findings to **SSM Automation** or ticketing; batch **Medium/Low**.  
+- **Systems Manager (SSM)** — Patch Manager/Automation docs to apply fixes for EC2 fleets.  
+- **CodeBuild/CodePipeline** — Break builds or block deploys on **High vulns** (containers/Lambda).  
+- **EKS/ECR Policies** — Prevent image deploy if **repo** has unresolved **Highs** (policy + admission control, if wired).
 
 ---
 
-## **Real Life Example**
+## **Pricing Model**
 
-You spin up an EC2 instance named **prod-web-01** with:
+Inspector charges are tied to **what you scan** and **how much**:
 
-- **Ubuntu 22.04**  
-- **Apache HTTP Server v2.4.49**  
-- **OpenSSL**  
-- **PHP**
+- 🖥️ **EC2 Coverage** — Based on the population of covered instances over time.  
+- 🐳 **ECR Images** — Per image scan/re-scan volume.  
+- 🔁 **Lambda** — Per function/layer coverage over time.  
 
-You also **upload a container to ECR** and **update your Lambda function**.
+> It’s tiered by volume and Region. Tune cost by:  
+> - Scoping coverage (environments/Regions)  
+> - Retiring unused images  
+> - Focusing **repos/functions that ship to prod**
 
-**Here’s what happens:**
-
-1. **Inspector detects** `prod-web-01` via **SSM**  
-2. **Scans** its software inventory  
-3. Finds **Apache 2.4.49** → links it to **CVE-2021-41773** *(real CVE: RCE via path traversal)*  
-4. **Generates a finding:**
-   - **Title:** *Apache Path Traversal RCE*  
-   - **Resource:** EC2 Instance **prod-web-01**  
-   - **Severity:** **Critical (CVSS 9.8)**  
-   - **Recommendation:** *Upgrade to Apache **2.4.51** or later*
-
-**Inspector sends this finding to:**
-
-- **Security Hub** *(if enabled)*  
-- **EventBridge** → **triggers Lambda** to **isolate the EC2**  
-- **SNS** → sends **SMS alert** to **SecOps**
-
-All of this is **automated** — **no manual scans**, **no third-party tools**.
+Check your Region’s pricing before committing.
 
 ---
 
-## **Final Thoughts**
+## **Operational & Security Best Practices**
 
-**AWS Inspector** is your **cloud-native vulnerability watchdog**.  
-It saves you from:
+1. **Turn It On Where It Matters First.**  
+   Prod accounts & Regions → then expand to staging.
 
-- **Manual scanning**  
-- **Outdated tools**  
-- **Delayed patching**
+2. **Tag for Ownership.**  
+   On EC2, **ECR repos**, Lambda:  
+   `Service`, `Team`, `Environment`, `DataOwner`.
 
-Security today is about **speed** and **visibility** — **Inspector** gives you **both**.
+3. **Shift Left.**  
+   Scan container images at **build** and **block** deploys with High/Critical findings.
 
-You can pair it with:
+4. **Thin Your Images.**  
+   Smaller base → fewer packages → smaller attack surface + faster remediation.
 
-- **GuardDuty** to **detect threats**  
-- **Macie** to **protect sensitive data**  
-- **AWS Config** to **enforce patch compliance**  
-- **Systems Manager Patch Manager** to **automate the fix**
+5. **Pin + Update.**  
+   Pin versions in `Dockerfiles`/`requirements.txt`; adopt **base-image refreshes**.
 
-If you want **real security maturity** in AWS, **Inspector** is a **foundational** part of that journey. It’s **not just a box checker** — it’s your **early warning system** against the most common cloud attack vector: **know**
+6. **Automate EC2 Patching.**  
+   Use **SSM Patch Manager**; validate with Inspector that vulns closed.
+
+7. **Lambda Hygiene.**  
+   Centralize layers, version them, roll forward aggressively. Keep functions small.
+
+8. **Don’t Cargo-Cult Severity.**  
+   Use **exploitability + exposure**. Score with Inspector, then layer business value.
+
+9. **Wire Response.**  
+   High → `EventBridge → SSM`/Lambda **runbook**  
+   Medium/Low → ticket with **SLA**.
+
+10. **Kill the Long Tail.**  
+    Remove **unused ECR images** and dead **Lambda layers**.
+
+# Comparisons You’ll Actually Use
+
+| **Tool**               | **Best At**                              | **How Inspector Fits**                                                                 |
+|------------------------|------------------------------------------|----------------------------------------------------------------------------------------|
+| **GuardDuty**          | Active threat **detections** (anomaly/intel) | Inspector addresses **vulnerability presence** before/alongside threats                |
+| **Macie**              | Sensitive data in S3                     | Complementary: Inspector lowers software risk; Macie lowers **data exposure** risk     |
+| **Config**             | Resource posture/compliance             | Use Config to enforce “must run current AMI/must use approved base image”; Inspector verifies **CVE status** |
+| **Security Hub**       | Posture hub & workflow                  | Central triage + automation for Inspector findings                                     |
+| **Third-Party Scanners** | Language/**SCA/DAST/SAST** depth       | Pair with Inspector for **AWS-native continuous coverage** and org scale               |
+
+---
+
+# Hands-On: Patterns That Work
+
+## 1) Containers (**ECR**) — Build-Time + Registry Guard
+
+### **Flow**
+
+- CI builds `blizzard/web` → runs an image scan → **fails build** if High/Critical.  
+- Successful images are pushed to **ECR** (Inspector scans again on push, then **re-scans** on new **CVEs**).  
+- **Admission** (if using **EKS**): only allow images with `ImageTag=approved` **and** no High findings.
+
+### **Why It Works**
+
+- Catches issues before they hit prod, and **keeps catching** as new **CVEs** appear.
+
+## 2) EC2 Fleet — Patch-at-Scale With **SSM**
+
+### **Flow**
+
+- Inspector flags `CVE-XXXX` on `Snowy-API` instances.  
+- **EventBridge** rule (High) triggers **SSM Automation** to:  
+  - snapshot (optional),  
+  - apply OS patch set,  
+  - reboot during maintenance window,  
+  - verify package versions.  
+- **Security Hub** updates the finding workflow to `NOTIFIED → RESOLVED` when Inspector closes it.
+
+### **Why It Works**
+
+- Turns findings into **repeatable runbooks** with auditability.
+
+## 3) Lambda — Layer Version Discipline
+
+### **Flow**
+
+- All functions use a small set of **blessed layers** (e.g., `blizzard-python-layer@v42`).  
+- Inspector flags High in that layer; pipeline bumps to `v43` with fixed libs.  
+- **One rollout** updates all functions referencing the layer; Inspector findings drop.
+
+### **Why It Works**
+
+- **Single knob** per language stack instead of 200 function-specific patches.
+
+---
+
+# Tuning & Hygiene Tables
+
+## Coverage & Routing Matrix
+
+| **Surface** | **Environment** | **Severity**     | **Action**                                                                 |
+|-------------|------------------|------------------|--------------------------------------------------------------------------|
+| ECR         | prod             | High/Critical    | Block deploy; open Pager + ticket; rebuild base image                    |
+| ECR         | staging/dev      | High/Critical    | Block merge; ticket to team; justify & time-box exceptions               |
+| EC2         | prod             | High             | Patch via **SSM** this window; escalate if not closed in 48h             |
+| Lambda      | prod             | High             | Bump layer; redeploy; verify via Inspector; notify **Blizzard-OnCall**   |
+| Any         | any              | Medium           | Ticket with 7–14d **SLA**; batch per service                             |
+| Any         | any              | Low              | Weekly digest; fix during posture sprint                                 |
+
+## Dockerfile Quick Wins
+
+| **Problem**          | **Fix**                                                                |
+|----------------------|------------------------------------------------------------------------|
+| Bloated base image   | Switch to `distro-minimal/base-alpine` (when compatible)              |
+| Unpinned packages    | Pin exact versions; record **SBOM/manifests**                         |
+| Layer sprawl         | Combine RUN steps; purge caches (`apk/apt clean`)                     |
+| Old base             | Rebuild weekly from latest base, even if app code unchanged           |
+
+---
+
+# Real-Life Example
+
+### **Scenario**
+
+A new `Winterday-Orders` release is ready. CI succeeds, but Inspector (**ECR**) flags a **High** in  
+`blizzard/orders-api:2025.09.24 – OpenSSL` in the base image has a fresh **CVE**.
+
+1. **Gate Hits**: The build step fails because policy forbids deploying Highs to prod.  
+2. **Fix Path**: Platform team updates the **base image** to a patched digest. App rebuilds with **no code changes**; image size shrinks a bit thanks to a slimmer base.  
+3. **Verification**: Inspector re-scans on push; **no Highs** remain. Security Hub rule clears the block.  
+4. **Deploy**: **EKS** admission allows the new tag; rollout proceeds.  
+5. **Cleanup**: A **repo** policy job deletes the vulnerable image tag after a grace period; findings auto-close as the artifact disappears.  
+6. **Evidence**: Hub shows finding closed with remediation notes; monthly report captures time-to-fix and affected services (just **Blizzard-Orders**, thanks to shared base images).
+
+**Outcome**: A widely exploited **CVE** never reached prod; you got the fix in hours with minimal human choreography.
+
+---
+
+# Final Thoughts
+
+**Amazon Inspector** is your **always-on CVE radar** for EC2, containers, and Lambda.  
+Use it to **rank risk sanely** (exploitability + exposure), **push fixes automatically** (**SSM**, rebuilds, layer bumps), and **prove closure** via Security Hub.
+
+Keep images small, patch EC2 on rails, centralize Lambda layers, and let Inspector watch the rest. Done this way, **Snowy’s stack** spends less time vulnerable and more time boring—in the best, sleep-thro
