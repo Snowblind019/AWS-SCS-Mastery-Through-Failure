@@ -1,160 +1,80 @@
 # Amazon Q Business
 
-## What Is Amazon Q Business
-Amazon Q Business is AWS’s enterprise-grade AI assistant designed to answer questions, generate content, and automate tasks across your organization’s internal knowledge.
+Amazon Q Business is a managed retrieval-augmented generation assistant that indexes an organization's internal content through prebuilt connectors and answers natural language questions against it with citations. Architecturally it sits above Bedrock, adding the parts that make an LLM usable on enterprise data: connectors, a managed index, an identity layer, and a permission model. The defining security property, and the reason it exists as a separate service rather than a Bedrock pattern, is that it propagates source-system permissions into retrieval. When a connector crawls SharePoint or Confluence, it ingests each document's access control list alongside the content, and at query time it filters candidate documents against the asking user's identity before anything reaches the model. That inversion matters because the default failure mode of every enterprise RAG deployment is an index that flattens permissions and cheerfully summarizes the compensation spreadsheet for whoever asks. The counterweight is that Q Business creates a single searchable index spanning systems that were previously separated by friction, so a permission mistake in one connector is now reachable through a natural language query rather than requiring someone to know where to look. The thing to hold onto is that Q Business enforces access at retrieval time using permissions copied from the source system, so its security depends entirely on those ACLs being correctly mapped and kept current.
 
-It’s powered by LLMs (via Amazon Bedrock) and integrates securely with your enterprise data (e.g., Confluence, Salesforce, SharePoint, Slack, etc.) so users can ask questions like:
-- “What’s our latest leave policy?”
-- “Summarize the Q3 revenue plan.”
-- “Show me the action items from the last compliance audit.”
+## How it works
 
-It’s like an internal ChatGPT for your company’s documents, but:
-- Fully managed by AWS
-- Enforces IAM and user-level permissions
-- Never trains on your data
-- Can connect to dozens of knowledge sources
-- Can generate meeting summaries, content drafts, SOPs, etc.
+- **Applications and indexes.** An application is the top-level resource holding the index, the data sources, the retriever configuration, the identity provider association, and the guardrails. The index stores parsed, chunked, and embedded document content along with each document's access control metadata.
 
-> **Note:** Amazon Q Business is *not* a dev tool. It’s a **knowledge discovery and productivity** tool for end users, managers, analysts, HR, legal, ops, etc.
+- **Identity model.** Users authenticate through IAM Identity Center, which federates to an external IdP such as Okta or Entra ID. Q Business resolves the signed-in user to an identity it can match against the ACLs captured during crawling. Getting this mapping right, particularly matching email addresses or group identifiers across systems, is the practical hard part of a deployment and the most common source of both over-exposure and false negatives.
 
----
+- **Connectors and permission ingestion.** Prebuilt connectors for SharePoint, Confluence, Slack, Google Drive, Salesforce, Jira, GitHub, S3, and dozens more. Each connector authenticates with credentials stored in Secrets Manager, crawls content on a schedule, and captures document-level ACLs including user and group grants. Custom sources can be pushed through the API with ACLs supplied explicitly.
 
-## Real-World Analogy
-Imagine Winterday works at a large telecom company. He forgot where the latest BGP onboarding procedure doc is. Instead of:
-- Asking on Slack
-- Digging through emails
+- **Retrieval-time filtering.** At query time the retriever filters candidate documents to those the asking user is authorized to see in the source system, then passes only those to the model. Documents the user cannot access are never in the prompt, which means the model cannot leak them regardless of how the question is phrased.
 
-He just types:
-**“How do I onboard a new BGP peer in the Spokane region?”**
+- **Attribute filtering and metadata boosting.** Document attributes captured at ingestion can constrain retrieval further or bias ranking, which is how you scope an assistant to a subset of content or prioritize authoritative sources over stale ones.
 
-**Q Business:**
-- Searches indexed documents across Confluence, Google Drive, SharePoint, and GitHub
+- **Guardrails and topic controls.** Global controls and per-topic rules define blocked words, blocked topics, and whether the model may answer from its own general knowledge when the index returns nothing. That last setting is significant: allowing fallback to model knowledge turns a grounded internal assistant into a general chatbot that will confidently answer questions about your policies from training data.
 
-- Filters results by Winterday’s IAM permissions
+- **Plugins and actions.** Q Business can invoke actions in external systems such as creating a Jira ticket or a ServiceNow record, either through prebuilt plugins or a custom plugin defined by an OpenAPI schema. Each action executes with credentials configured for the plugin, which makes plugins a write path from a chat interface into production systems and a distinct authorization concern from retrieval.
 
-- Generates a clean, cited response:
+- **Encryption.** Content at rest in the index is encrypted with an AWS owned key by default or a customer managed KMS key specified at application creation. TLS everywhere in transit. Connector credentials live in Secrets Manager under your key policy.
 
-> “To onboard a BGP peer, configure the route-policy, update NMS, and notify NOC. See: SOP-Onboarding-BGP-2024.pdf (page 4).”
+- **Network.** Connectors reaching private data sources use a VPC configuration with subnets and security groups. The Q Business API is reachable through interface VPC endpoints, and end user access to the web experience can be restricted by IdP policy and network conditions.
 
----
+- **Data handling.** Customer content is not used to train the underlying foundation models, and inference runs within the AWS boundary. This is the contractual and architectural answer to the most common objection in regulated environments.
 
-## Core Architecture: How Q Business Works
+- **Logging.** CloudTrail records control plane operations including application, index, data source, plugin, and guardrail configuration, plus API activity. Conversation content is retrievable through the conversation history APIs, and chat interaction logging to CloudWatch Logs can be configured. Assuming that every prompt and response is captured in CloudTrail by default is a mistake worth correcting explicitly.
 
-Amazon Q Business sits on top of Bedrock foundation models (Claude, Titan, etc.) but adds layers for:
-- Enterprise connectors
-- Indexing and retrieval
-- Identity-aware access control
-- Natural language interfaces
-- Customization and governance
+## Q Business versus adjacent AI and search options
 
----
+| Option | Data grounding | Permission enforcement | Who operates the retrieval layer | Action execution | Typical consumer |
+|---|---|---|---|---|---|
+| Amazon Q Business | Managed index over connectors | Source-system ACLs enforced at retrieval | AWS | Plugins to external systems | End users across the business |
+| Amazon Q Developer | Code, AWS docs, and your repositories | Repository and IAM permissions | AWS | Code changes and AWS operations | Developers and cloud engineers |
+| Bedrock Knowledge Bases | Vector store you configure over S3 or a database | Metadata filtering you implement | You | Bedrock Agents | Applications you build |
+| Amazon Kendra | Managed enterprise search index | Source ACLs, token-based user context | AWS | None | Search applications |
+| Bedrock with a custom RAG pipeline | Whatever you build | Entirely your responsibility | You | Whatever you build | Applications you build |
+| OpenSearch with vector search | Indices you manage | Fine-grained access control on documents and fields | You | None | Search and analytics applications |
 
-## Architecture Flow
+## What gets tested
 
-```text
-[User Prompt]
-   ↓
-[User Identity + IAM context captured]
-   ↓
-[Amazon Q Business searches Knowledge Base (via RAG)]
-   ↓
-[Relevant documents retrieved from connected sources]
-   ↓
-[LLM (via Bedrock) generates answer with citations]
-   ↓
-[Response rendered with source highlights + access control]
-```
+- **Retrieval-time ACL enforcement is the differentiator.** If a requirement says users must only receive answers grounded in content they are already permitted to see, the answer is Q Business or Kendra with user context, not a Bedrock Knowledge Base where filtering is your responsibility to implement.
 
----
+- **Identity mapping is the weak point.** Expect scenarios where a user sees content they should not, and the root cause is a connector whose group or user identifiers did not map cleanly to the IdP identity, or an index whose ACLs are stale relative to a permission revocation in the source.
 
-## Key Components
+- **Source permission changes are not instant.** Revoking a user's access in SharePoint takes effect in Q Business only after the next crawl, so the answer to "how quickly does a revocation propagate" is the sync schedule, and shortening it is the mitigation.
 
-| Component           | Description                                                               |
-|---------------------|---------------------------------------------------------------------------|
-| Admin Console       | Manage users, permissions, connectors, policies                           |
-| Connectors          | 40+ native integrations (Confluence, M365, Slack, Salesforce, etc.)       |
-| Indexing Engine     | Parses, chunks, and embeds documents securely                             |
-| Foundation Models   | Claude v3, Amazon Titan, others via Bedrock                               |
-| Retrieval-Augmented Generation (RAG) | Injects relevant documents into prompt for grounded answers |
-| Access Control      | Enforces permissions from source systems (e.g., SharePoint ACLs)          |
-| Audit Logging       | Full CloudTrail, query logs, and answer traceability                      |
-| Customization Layer | Company-specific policies, tone, and guardrails                           |
+- **Allowing the model to answer from general knowledge** is a configuration choice with a real risk profile. When a question describes the assistant fabricating policy answers, the answer includes disabling fallback so it responds only from indexed content or declines.
 
----
+- **Plugins are a write path.** An action that creates a ticket or updates a record executes with the plugin's configured credentials, not the user's, so plugin authorization is separate from retrieval authorization and needs its own scoping and review.
 
-## Security, Governance, and Compliance
+- **Connector credentials live in Secrets Manager**, and the Q Business service role needs access to them and to the KMS key encrypting them. A connector failing to sync after encryption is enabled is a key policy problem.
 
-This is where Amazon Q Business shines — it’s built with **enterprise paranoia** in mind.
+- **Customer managed KMS key on the application** is the answer for control over index encryption and for the ability to render indexed content unreadable by disabling the key.
 
-| Security Layer     | Controls                                                                 |
-|--------------------|--------------------------------------------------------------------------|
-| Data Privacy       | Your data is never used to train models                                  |
-| VPC Access         | Connect via PrivateLink for no internet exposure                         |
-| SSO Integration    | Supports IAM Identity Center, Okta, Azure AD, etc.                       |
-| Access Enforcement | Query results obey user’s permissions from original source               |
-| Data Encryption    | At rest (KMS) and in transit (TLS 1.2+)                                  |
-| CloudTrail Logging | All prompts and responses logged for auditing                            |
-| Guardrails         | Optional policies to restrict sensitive output, PII, offensive content   |
-| Customization      | Define tone, restricted topics, priority sources, etc.                   |
+- **Customer content is not used for model training**, which is the answer to the data governance objection, alongside the fact that inference stays within the AWS boundary.
 
-- Suitable for finance, healthcare, legal, and high-compliance industries
-- Enables **zero trust search** across company knowledge
+- **Guardrails handle topic and content restriction**, not access control. Confusing the two is a distractor: blocking a topic does not prevent retrieval of a document the user should not have, and ACL enforcement does not stop the model discussing a forbidden subject.
 
----
+- **Q Business versus Q Developer.** Q Business is for organizational knowledge and end users. Q Developer is for code and AWS operations. Questions naming one and offering the other are testing that distinction.
 
-## Connectors: Plug In Your Knowledge
+## Limitations
 
-Amazon Q Business includes pre-built connectors for:
+- Security is inherited, not created. Q Business faithfully reproduces the source system's permissions, including its mistakes. An overshared SharePoint folder becomes an overshared answer, and the assistant makes previously obscure content trivially discoverable.
 
-| Source         | Examples                                           |
-|----------------|----------------------------------------------------|
-| Documentation  | SharePoint, Google Drive, Dropbox, Box            |
-| Collaboration  | Confluence, Slack, Microsoft Teams, Notion        |
-| Dev Tools      | GitHub, Bitbucket, Jira, CodeCommit               |
-| CRM            | Salesforce, Zendesk                               |
-| Data Sources   | Amazon S3, Athena, RDS (via JDBC), Redshift       |
+- Permission freshness is bounded by the crawl schedule. Between a revocation in the source and the next sync, the index still authorizes the removed user, and there is no immediate propagation mechanism.
 
-Each connector handles:
-- Authentication
-- Scheduled indexing
-- Permission mapping
+- Identity mapping across heterogeneous systems is genuinely difficult. Systems that identify users by email, by SAM account name, by internal ID, or by group nesting all have to reconcile to one IdP identity, and mismatches fail in both directions.
 
----
+- Not every connector captures ACLs with the same fidelity. Some sources have permission models the connector cannot fully represent, and custom sources rely on you supplying correct ACLs at ingestion.
 
-## Real-Life Example: Snowy’s Internal AI Assistant
+- Generated answers can be wrong even when grounded, and a citation to a real document does not guarantee the summary of it is accurate. In regulated contexts an answer is a starting point, not an authoritative statement.
 
-Snowy’s team at NoaNet uses Q Business to:
-- Search DWDM diagrams across SharePoint
-- Summarize Zayo maintenance notices from Gmail
-- Pull ticket templates from Confluence
-- Answer HR questions about PTO policy
-- Draft incident reports using a mix of RAG + templates
+- Chat content auditing is not comprehensive by default. Reconstructing exactly what a user asked and what they were told requires configuring conversation logging in advance.
 
-**Admins enforce:**
-- No code generation
-- Only Claude v3
-- Custom tone: professional + concise
-- Logging to CloudWatch
+- Plugins execute with their own credentials, so a chat interface becomes an execution path into external systems, and prompt-driven action invocation is an injection surface distinct from anything in the retrieval path.
 
-**Result:** a fully internal, secure, compliant AI assistant across teams.
+- Connector coverage, feature parity, and Region availability vary, and connectors to systems outside AWS require network reachability and stored credentials for each one, each of which is a standing access grant into that system.
 
----
-
-## Final Thoughts
-
-Amazon Q Business is the **Bedrock-powered brain** of your enterprise.
-
-It’s **not**:
-- A dev tool
-- A public chatbot
-- A generic Q&A app
-
-It **knows your documents**, **respects your security policies**, and **integrates into your workflow**.
-
-✔️ Bedrock-hosted
-✔️ No training on your data
-✔️ Enforces real permissions
-✔️ Connects to your stack
-✔️ Flexible, traceable, customizable
-
-Whether you're in healthcare, telecom, law, or government — **Q Business is how you operationalize GenAI safely at scale.**
+- Cost scales with indexed document volume, connector count, and user subscriptions rather than with query volume, so a broad initial index is expensive whether or not anyone uses it.

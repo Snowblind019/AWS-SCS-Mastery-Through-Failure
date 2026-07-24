@@ -1,187 +1,86 @@
 # AWS Lambda
 
-## What Is The Service
+AWS Lambda is event-driven compute where AWS owns the host, the runtime, and the scaling, and you own a handler function, an IAM execution role, and a set of triggers. There is no instance to harden, no OS to patch, and no long-lived process for an attacker to persist in, which removes an entire class of workload security problems. What replaces them is identity. A Lambda function is fundamentally a piece of code bound to an IAM role, so the security posture reduces to what that role can do, who is permitted to invoke the function, and what the code does with the credentials the runtime hands it through environment variables. Lambda is also the default remediation primitive in AWS security architecture, which means a function triggered by GuardDuty or Config frequently holds permissions to isolate instances, revoke sessions, or modify security groups, making it one of the most privileged and least visible pieces of code in an account. The thing to hold onto is that a Lambda function is an IAM role with a trigger attached, so invocation permission plus execution role scope is the entire security question.
 
-AWS Lambda is event-driven compute without servers to manage. You package code (or a container image), set memory/CPU, and Lambda runs it on demand when something happens: an HTTP request at API Gateway or ALB, a new object in S3, a message on SQS, a change stream in DynamoDB, a cron from EventBridge, and dozens more. Lambda scales automatically, bills per millisecond, and keeps you focused on business logic instead of capacity, OS patching, and idle waste.  
-Why it matters: most workloads have spiky, bursty, or glue-style patterns—exactly where servers are either sleeping (wasting money) or you’re under-provisioned (hurting latency). Lambda turns that into pay-only-when-it-runs compute with built-in resilience, straightforward observability hooks, and a huge trigger ecosystem. For Snowy’s teams, Lambda becomes the connective tissue across services—ETL steps, webhooks, security automations, compliance fixers, fan-out processors, and “tiny brains” behind API endpoints—without the ceremony of a whole fleet.
+## How it works
 
----
+- **Execution environment.** Each concurrent invocation runs in an isolated Firecracker micro-VM with its own filesystem and memory. Environments are reused across invocations while warm, which means global state, cached credentials, and anything written to `/tmp` persist between invocations of different callers on the same environment. That reuse is the reason `/tmp` must never hold sensitive data past the handler and why per-request state must not live in globals.
 
-## Cybersecurity And Real-World Analogy
+- **Execution role.** Assumed by the service, with temporary credentials injected into the environment as variables. Everything the function does to AWS uses this role. Scoping it to specific resource ARNs, and constraining KMS usage with `kms:ViaService`, is the primary least-privilege work.
 
-**Security analogy.** A SOC with on-call analysts who wake only when a specific alarm fires. No one sits around burning budget. Lambda is that: it sleeps until a well-defined event (S3 object created, GuardDuty finding, Config violation) and then executes the exact playbook you wrote—least-privileged by IAM role, fenced by timeouts, VPC controls, and payload size. It’s detector-to-responder with almost no idle surface.  
-**Real-world analogy.** A reliable valet switch on a machine: flip it (event), the tool spins up, does the job fast, then powers down. You’re not paying for the shop to stay open at 3 a.m.; when Blizzard-Checkout needs a PDF receipt rendered or Winterday-Inventory needs to normalize a CSV, Lambda appears, works, disappears.
+- **Resource-based policy.** Separate from the execution role, this governs who may invoke the function. Service principals such as `s3.amazonaws.com`, `events.amazonaws.com`, and `apigateway.amazonaws.com` need explicit statements, guarded with `aws:SourceArn` and `aws:SourceAccount` to prevent a confused deputy where another account's bucket or rule triggers your function.
 
----
+- **Invocation modes.** Synchronous, where the caller waits and handles its own retries. Asynchronous, where Lambda queues internally, retries twice with backoff, and routes outcomes to a destination or dead-letter queue. Event source mappings, where Lambda polls SQS, Kinesis, DynamoDB Streams, MSK, or Kafka on your behalf using the execution role, handling batching, checkpointing, and partial batch failures.
 
-## How It Works
+- **Environment variables and secrets.** Environment variables are encrypted at rest with an AWS managed key by default or a customer managed key. They are visible in the console and through `GetFunctionConfiguration` to anyone with that permission, so they are configuration storage, not secret storage. Secrets belong in Secrets Manager or Parameter Store, retrieved at runtime, ideally through the Parameters and Secrets extension which caches them locally.
 
-### Execution Model (Quick Mental Picture)
+- **VPC attachment.** A function attached to subnets gets Hyperplane ENIs and can reach private resources such as RDS or ElastiCache. It then has no internet access unless you provide a NAT gateway, and reaching AWS APIs privately requires interface endpoints. VPC attachment is how you both reach private data and constrain egress.
 
-- Invoke → Lambda allocates an execution environment (sandboxed micro-VM), loads your runtime + code, and calls your handler.
-- That environment stays warm for a bit and may handle more invocations (reusing init state).
-- On scale-out, Lambda creates more environments (horizontal).
-- You control memory (which scales vCPU, networking) and timeout (max 15 minutes).
-- `/tmp` ephemeral storage defaults to 512 MB; you can configure up to 10 GB.
-- ARM64 and x86_64 are supported; ARM64 is often cheaper/faster-per-dollar if your deps are compatible.
+- **Code signing.** A code signing configuration backed by AWS Signer requires deployment packages to carry a valid signature from a trusted publisher, and can be set to reject or warn on expired or revoked signatures. This is the supply chain control preventing an unauthorized package from being deployed to a function.
 
-### Cold Starts vs Warm
+- **Concurrency controls.** Reserved concurrency both guarantees and caps a function's concurrent executions, which isolates it from noisy neighbors and, more importantly, bounds the damage a runaway or attacker-triggered function can do. Setting reserved concurrency to zero is the fastest way to stop a function entirely during an incident. Provisioned concurrency pre-warms environments for latency.
 
-- **Cold start** = first run of a new environment: runtime start + init code + your handler.
-- **Warm** = environment already initialized: only handler runs.  
-You can mitigate cold starts via:
-- Provisioned Concurrency (pre-warmed environments),
-- Smaller packages, faster init paths,
-- SnapStart (for Java): snapshot after init, rapid restore on invoke (with caveats for certain libraries/entropy).
+- **Layers and extensions.** Layers share libraries across functions. Extensions run alongside the function for telemetry, secret caching, or agents. Both are code executing inside your environment with access to the execution role's credentials, so a layer from an untrusted publisher is a supply chain risk with the same blast radius as the function itself.
 
-### Triggers & Invocation Patterns
+- **Packaging.** Zip archives up to 50 MB compressed or 250 MB uncompressed, or container images up to 10 GB from ECR. Container images bring image scanning through ECR and Inspector into the picture, which zip packages lack.
 
-There are two broad modes:
-- **Synchronous (request/response):** caller waits for the result. Good for APIs and user-facing latency.
-- **Asynchronous (fire-and-handle):** Lambda queues internally and retries with backoff; you can route outcomes to Destinations or DLQ.  
-Event source mappings (poll-based) connect streams/queues (SQS, Kinesis, DynamoDB Streams, MSK, Kafka) and handle batching, checkpointing, retries, partial failures.
+- **Logging and tracing.** CloudWatch Logs receive every invocation's output, with the log group encryptable by a customer managed key. CloudTrail records control plane operations including `UpdateFunctionCode`, `UpdateFunctionConfiguration`, and `AddPermission`, and can record `Invoke` as a data event when enabled. X-Ray captures the call graph. Lambda Insights adds host-level metrics.
 
-**Common triggers by behavior**
+- **Runtime management.** AWS patches the managed runtime. The runtime version update policy can be set to auto, function update, or manual, which controls whether a runtime patch reaches your function immediately or on your next deployment. Deprecated runtimes eventually stop receiving security patches and then block updates entirely.
 
-| Trigger                         | Invoke Mode | Fan-out/Batching                            | Retries                    | Typical Use                               |
-|---------------------------------|-------------|---------------------------------------------|----------------------------|-------------------------------------------|
-| API Gateway / ALB               | Sync        | N/A                                         | Caller retries             | HTTP APIs, webhooks, lightweight backends |
-| S3 (ObjectCreated)              | Async       | N/A                                         | 2 retries + DLQ/Destinations | ETL, thumbnails, metadata extraction      |
-| EventBridge (rules / cron)      | Async       | N/A                                         | 2 retries + DLQ/Destinations | Schedules, automations, security responses|
-| SQS                              | Poll (ESM) | Yes (1–10, up to 10k for FIFO w/ LBS)       | Until visibility timeout, then redrive | Queue workers, decoupled pipelines        |
-| Kinesis / DynamoDB Streams      | Poll (ESM) | Yes (shard-based)                           | Retries until data expires | Ordered, at-least-once stream processing  |
-| MSK / Kafka                     | Poll (ESM) | Yes                                         | Retries with backoff       | Kafka consumer without servers            |
-| Cognito, CodeCommit, CloudWatch Logs | Async  | N/A                                         | 2 retries + routing        | Event-driven glue, enrichment             |
+## Lambda versus adjacent compute options
 
-Destinations (for async): on success/failure, route metadata to SNS, SQS, EventBridge, or another Lambda for audit/compensation flows. DLQ is supported for async (SNS/SQS) when you just want failures parked.
+| Option | Patching responsibility | Identity model | Max execution time | Network placement | Supply chain scanning |
+|---|---|---|---|---|---|
+| AWS Lambda | AWS patches the runtime, you own dependencies | Execution role plus resource policy | 15 minutes | Optional VPC attachment, no internet by default when attached | ECR and Inspector for container images, none for zip |
+| AWS Fargate | AWS patches the platform, you own the image | Task role plus task execution role | Unbounded | Always in a VPC | ECR image scanning, Inspector |
+| Amazon ECS on EC2 | You patch the host and the image | Task role plus instance profile | Unbounded | Always in a VPC | ECR plus host scanning |
+| Amazon EC2 | You patch everything | Instance profile | Unbounded | Always in a VPC | Inspector on the instance |
+| AWS App Runner | AWS patches the platform | Instance role | Unbounded | VPC connector optional | ECR scanning |
+| Step Functions | Not applicable, no code | One execution role per state machine | One year for Standard | None | Not applicable |
 
-### Packaging, Runtimes, and Dependencies
+## What gets tested
 
-- **Zip functions:** upload code + deps (or use layers). Great for small artifacts.
-- **Container images:** up to 10 GB images from ECR; use base Lambda runtimes or custom. Best for heavy native deps (FFmpeg, wkhtmltopdf, ML libs).
-- **Runtimes:** Node.js, Python, Java, .NET, Go, Ruby; custom runtime via Runtime API if you need something else.
-- **Layers:** share libraries across functions (mind versioning and size).
-- **Extensions:** sidecar-like processes for telemetry/agents (e.g., OpenTelemetry Collector).  
-**Tip:** keep init work minimal; lazy-load heavy deps inside the handler or use Init Phase wisely (benefits warms, costs colds).
+- **Execution role versus resource-based policy.** The execution role is what the function can do. The resource policy is who can invoke it. Questions consistently offer the wrong one as a distractor, particularly for cross-account invocation, which requires a resource policy statement.
 
-### Concurrency, Scaling, and Backpressure
+- **`aws:SourceArn` and `aws:SourceAccount` on service principal grants.** A permission granted to `s3.amazonaws.com` without a source condition lets any account's bucket invoke the function, which is the canonical Lambda confused deputy.
 
-- Unreserved concurrency scales automatically; a per-region account limit caps total concurrent executions (raise as needed).
-- Reserved concurrency on a function guarantees capacity and caps its max (isolate noisy neighbors).
-- Provisioned Concurrency pre-warms N environments for stable latency (APIs, p99 SLOs).
-- SQS & streams scale with batch size and shard/partition parallelism; use partial batch responses to avoid reprocessing good records when a few fail.  
-**Failure/backpressure:**
-- **SQS:** adjust visibility timeout > function timeout; use DLQ on the queue.
-- **Kinesis/DDB Streams:** a single failing record blocks the shard; isolate by routing or fix-and-replay.
+- **Environment variables are not secrets.** Anyone with `lambda:GetFunctionConfiguration` reads them, encrypted at rest or not. The answer for credentials is Secrets Manager or Parameter Store retrieved at runtime, with the execution role scoped to the specific secret ARN.
 
-### Networking, Storage, and State
+- **Reserved concurrency set to zero** is the containment answer for stopping a compromised or misbehaving function immediately without deleting it and losing forensic evidence.
 
-- **VPC access:** attach Lambda to subnets for private resources (RDS, ElastiCache); use VPC endpoints for AWS APIs without NAT.
-- **`/tmp`:** ephemeral disk up to 10 GB per environment; good for transient files.
-- **EFS:** mount a shared file system for larger state or models; mind latency and throughput modes.
-- **State:** keep functions stateless between invocations; persist to DynamoDB, S3, RDS, or caches.
-- **Env vars & secrets:** store configs in env vars (with KMS encryption) and retrieve secrets at runtime (Secrets Manager/Parameter Store) with a short TTL cache.
+- **VPC attachment removes internet access.** A function that suddenly cannot reach a third-party API after being attached to a VPC needs a NAT gateway, and a function that needs AWS APIs privately needs interface endpoints. This exact scenario recurs.
 
-### Reliability, Retries, and Exactly-Once(ish)
+- **Code signing is the answer for ensuring only approved artifacts deploy.** Combined with `lambda:UpdateFunctionCode` restrictions, it addresses the "an attacker with deploy permissions replaced our function code" scenario.
 
-- **Sync:** caller handles retries and idempotency keys.
-- **Async:** built-in retries with exponential backoff; on exhaustion, send to DLQ or Destination.
-- **Streams/queues:** at-least-once delivery; design idempotent handlers (dedupe table, idempotency keys, conditional writes).
+- **CloudTrail `Invoke` is a data event**, off by default. Knowing who invoked a function requires enabling Lambda data events on the trail.
 
-### Observability
+- **`UpdateFunctionCode` and `AddPermission` are the persistence actions to alert on.** Modifying a privileged remediation function's code, or adding an invoke permission for an external account, are both quiet ways to establish control.
 
-- **CloudWatch Logs:** every invocation’s logs go to a log group; use structured JSON for friendly search.
-- **Metrics:** Invocations, Errors, Duration, Throttles, IteratorAge (streams), DeadLetterErrors, ConcurrentExecutions.
-- **X-Ray / OpenTelemetry:** traces and spans; ServiceLens to see upstream/downstream.
-- **Lambda Powertools (per language):** opinionated logging/metrics/tracing/idempotency/middleware that saves a lot of time.
+- **Layers and extensions execute with the execution role.** A question about third-party observability agents or shared libraries is testing whether you recognize them as code running inside your trust boundary.
 
-### IAM and Security
+- **`kms:ViaService` condition** scopes a function's KMS permissions to use through a specific service, which is the standard hardening for an execution role that needs decrypt for one purpose only.
 
-- **Execution role:** what the function can do (read S3, write DynamoDB, call KMS, etc.). Keep it least-privilege; consider policy templates per service.
-- **Resource policy:** who may invoke the function (API Gateway, EventBridge, another account).
-- **Networking:** VPC + SGs for private access; VPC endpoints for egress to AWS APIs; restrict internet unless needed.
-- **Code signing (optional):** enforce signed artifacts; runtime updates handled by AWS.
-- **Timeouts & memory:** part of security-by-default—fewer stuck workers, bounded work.
+- **Runtime deprecation.** An unmaintained runtime stops receiving patches, which is a vulnerability management finding, and the answer is migrating the function, not requesting an exception.
 
----
+## Limitations
 
-### Cost Model
+- Fifteen minute maximum execution time. Longer work belongs in Step Functions orchestrating multiple invocations, Fargate, or Batch.
 
-You pay for:
-- Requests (per million requests), and
-- Compute duration (GB-seconds), based on memory setting (which scales CPU/network proportionally). Provisioned Concurrency adds a warm capacity charge. ARM64 can reduce cost for compatible workloads. There’s also a free tier (requests + GB-seconds) per month.
+- Environment reuse means state leaks between invocations if the code is careless. Globals, connection pools, cached credentials, and `/tmp` contents all persist, and two different tenants' requests can land on the same warm environment.
 
-**Practical levers to lower cost**
-- Right-size memory for faster finish (often cheaper to give more RAM/CPU and finish sooner).
-- Use ARM64 where possible.
-- Batch with SQS/streams (do more work per invocation).
-- Cache config/secrets and connections across warms.
-- Offload long work to Step Functions or Fargate if consistently near 15-min cap.
+- Environment variables are readable by anyone with configuration read permission, so encryption at rest provides no protection against the most likely disclosure path.
 
-### Handy Comparison Tables
+- Zip-packaged functions have no built-in vulnerability scanning. Dependency risk must be handled in the build pipeline, unlike container images which get ECR and Inspector coverage.
 
-**Invocation Behavior Cheat-Sheet**
+- Package size limits of 50 MB zipped and 250 MB unzipped push heavy dependencies toward container images or layers, and layers themselves count toward the unzipped limit.
 
-| Source                | Ordering   | Delivery        | Failure Path          | Notes                                   |
-|----------------------|------------|-----------------|-----------------------|-----------------------------------------|
-| API Gateway / ALB    | N/A        | Sync            | Caller sees error     | Low-latency APIs; consider Provisioned Concurrency |
-| S3 / EventBridge     | N/A        | Async           | Retries → DLQ/Destination | Great for decoupled pipelines        |
-| SQS                  | N/A        | At-least-once   | Redrive to DLQ        | Use partial batch response and idempotency |
-| Kinesis / DDB Streams| Per shard  | At-least-once, ordered per shard | Stuck on bad record | Monitor IteratorAge; isolate hot shards |
-| MSK/Kafka            | Per partition | At-least-once, ordered per partition | Retries with backoff | Tune batch sizes and timeouts         |
+- Attaching to a VPC introduces ENI management, subnet IP consumption at scale, and the loss of default internet egress, all of which surprise teams that attach a function to reach one database.
 
-**Choosing Packaging**
+- At-least-once delivery from event source mappings and asynchronous retries mean duplicate execution is normal, so any function taking a destructive or non-idempotent action needs its own deduplication.
 
-| Packaging     | Use When                         | Pros                                  | Cons                                    |
-|---------------|----------------------------------|----------------------------------------|-----------------------------------------|
-| Zip           | Small deps, fast deploys         | Simple, small artifact, quick cold start | Native deps are painful                |
-| Container image | Heavy native libs, ML, toolchains | Familiar Docker flow, up to 10 GB     | Watch image size; slower pulls if large |
+- A single failing record blocks a Kinesis or DynamoDB Streams shard until it expires or is skipped, so a poison record can halt an entire stream's processing.
 
----
+- Account-level concurrency is a regional quota shared across all functions. One function scaling aggressively throttles everything else, including security remediation functions, unless reserved concurrency isolates them.
 
-### Operational & Design Best Practices (Snowy’s Checklist)
-
-- Design for idempotency. Use request IDs and conditional writes; store a “seen” key for dedupe.
-- Keep handlers sharp. Minimal init, small artifacts, lazy-load heavy deps, prefer ARM64 when possible.
-- Tune timeouts and visibility timeouts (SQS) correctly; never let the queue win.
-- Use Provisioned Concurrency for p99-sensitive APIs; keep others on-demand.
-- Batch smartly on SQS/streams; enable partial batch response.
-- VPC endpoints for AWS APIs; private subnets for DBs; avoid NAT costs when possible.
-- Emit structured logs; adopt Powertools for logging/metrics/tracing/idempotency.
-- Least-privilege roles; separate read/write; scope KMS with `kms:ViaService`.
-- Measure before optimizing. Look at Duration, InitDuration, Throttles, IteratorAge, ConcurrentExecutions.
-- Know when not to use Lambda. If it’s CPU-bound for hours, needs >15 minutes, or requires sticky state—consider Fargate, ECS, or EC2.
-
----
-
-## Real-Life Example (End-to-End, Winter Names)
-
-**Scenario.** Winterday-Orders ingests e-commerce orders. Requirements: accept HTTP requests, validate, enqueue for processing, enrich with inventory data, and produce a PDF invoice—without running servers.
-
-**API front door**  
-API Gateway (HTTP API) → Lambda `orders-ingest` (ARM64, 1024 MB, 5s timeout).  
-Validates payload, writes to SQS `orders-queue`, returns 202 Accepted.  
-Provisioned Concurrency set to 10 for consistent p99.
-
-**Order pipeline**  
-Lambda `orders-consumer` (event source mapping from SQS, batch size 10).  
-Reads batch, enriches from DynamoDB inventory, calculates totals, writes normalized record to S3 and DynamoDB orders.  
-If one record fails, uses partial batch response to ack good ones and only retry the bad. Idempotency key = `orderId`.
-
-**Invoices**  
-S3 put event on normalized order → Lambda `invoice-renderer` (container image with wkhtmltopdf, 4096 MB, `/tmp` 4 GB).  
-Renders PDF to `/tmp`, uploads to S3 `invoices/...`, sets pre-signed URL back on orders row.
-
-**Observability & guardrails**  
-Powertools for logs/metrics/tracing.  
-Alarms on Throttles, Errors, SQS age of oldest, and InitDuration spikes.  
-Execution roles least-privilege; KMS decrypt constrained with `kms:ViaService`.  
-Destinations: on async failure, send to EventBridge bus `blizzard-failures` for triage (and page Snowy-OnCall if rate > threshold).
-
-**Outcome:** No fleets to patch, linear scale with traffic, cost tied to actual usage, clear signals when things tilt.
-
----
-
-## Final Thoughts
-
-Lambda shines when you build small, well-aimed units of work tied to clear events, with idempotent behavior and tight IAM. Pair it with SQS/streams for decoupling, API Gateway/ALB for HTTP, and Step Functions when workflows get real. Keep the artifacts lean, the logs structured, the alarms pointed at user impact, and the network private by default. Do that, and Snowy’s serverless stack stays calm in steady state, sharp under load, and honest about what it’s doing—one quick, exact piece of work at a time.
+- Cold starts add latency that is worst for VPC-attached functions with large packages, and provisioned concurrency solves it at a standing cost that partly defeats the pay-per-use model.

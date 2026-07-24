@@ -1,162 +1,72 @@
-# AWS Service Quotas 
+# AWS Service Quotas
 
----
+AWS Service Quotas is the central console and API for viewing the resource and rate limits that apply to an account, tracking usage against them, and requesting increases. Every service enforces its own quotas independently; Service Quotas is the single surface that reports them and brokers change requests. Its security relevance is mostly indirect but real in two directions. Defensively, a quota is a hard ceiling on how much infrastructure any principal can create, so it caps the blast radius of a compromised credential, a runaway automation loop, or a cryptomining deployment, and quota exhaustion alarms are often the earliest signal that something is creating resources it should not be. Operationally, quotas are an availability risk: a service hitting a limit fails closed, and a security control that cannot scale is a control that stops working during exactly the event it exists for, whether that is CloudTrail trail count, GuardDuty finding volume, KMS request rate, or Lambda concurrency for a remediation function. The thing to hold onto is that Service Quotas reports and requests, it does not enforce anything itself, so quotas are a ceiling you inherit rather than a policy you author.
 
-## What Is The Service
+## How it works
 
-**AWS Service Quotas** is a **centralized dashboard and API** that lets you view and manage **resource limits** (also called *quotas*) for AWS services in your account.
+- **Quota scope.** Most quotas are per account per Region. Some are per account globally, and some are per resource, such as rules per security group or security groups per ENI. An increase applies only to the Region it was requested in, which is a recurring operational surprise in multi-Region deployments.
 
-Every AWS service — EC2, Lambda, IAM, etc. — has built-in thresholds that prevent abuse, overuse, or system strain. These quotas govern:
+- **Adjustable versus non-adjustable.** Adjustable quotas can be raised through a request. Non-adjustable quotas are fixed by the service for architectural or safety reasons and no support case will move them. The Service Quotas console shows which is which per quota, and designing around a non-adjustable limit rather than requesting it is the correct instinct.
 
-- Max EC2 instances per region  
-- Max IAM roles  
-- Max VPCs, subnets, EIPs, and more  
+- **Applied quota value versus default.** Each quota has an AWS default and an applied value for your account. The applied value is what is enforced, and it can differ from the default after a prior increase, which means reading the default from documentation rather than the applied value from the API gives the wrong answer.
 
-Most quotas are **soft** (can be increased), while others are **hard** (fixed).
+- **Usage tracking.** Service Quotas reports current utilization for quotas where the service publishes usage metrics, exposed through CloudWatch in the `AWS/Usage` namespace. Not every quota has usage data, so some limits are only observable through failed API calls.
 
-### Why It Matters
+- **CloudWatch alarms on utilization.** From the console or the API you can create an alarm on the ratio of usage to the applied quota value, typically firing at 70 or 80 percent. This is the mechanism for getting warned before a limit causes a failure, and it is also how quota consumption becomes a detection signal.
 
-If you **don’t track your quotas**, you risk:
+- **Increase requests.** Submitted through the console, CLI, or API with `RequestServiceQuotaIncrease` specifying a service code, a quota code, and a desired value. Some requests are approved automatically, others route to a support engineer for review. Request history is retrievable, which matters for change evidence.
 
-- Failed deployments  
-- Blocked scaling events  
-- Outages due to “silent throttling”  
+- **Quota request templates.** With Organizations integration and a delegated administrator, a template defines quota increases automatically requested for every new account as it joins the Organization. This is how a landing zone ensures new accounts start with adequate limits for logging, security tooling, and workload capacity rather than tripping over defaults months later.
 
-For **security and governance**, quotas help:
+- **IAM surface.** `servicequotas:*` actions govern viewing quotas, requesting increases, and managing templates. `servicequotas:RequestServiceQuotaIncrease` is the meaningful one to restrict, since raising a limit removes a ceiling, and template management should be restricted to the delegated administrator.
 
-- Limit blast radius  
-- Enforce privilege boundaries  
-- Prevent runaway costs  
+- **Logging.** CloudTrail records quota increase requests, template changes, and association or disassociation of the Organizations template. `LimitExceeded` and `ThrottlingException` errors from the underlying service appear in that service's CloudTrail entries as failed calls, which is where quota exhaustion actually becomes visible in an investigation.
 
-You can also create **Custom Quotas** and **CloudWatch alarms** to monitor usage proactively.
+- **Trusted Advisor overlap.** Trusted Advisor's service limits checks report a subset of quotas with utilization and are available on Business and Enterprise Support, which predates and partially duplicates Service Quotas.
 
----
+## Service Quotas versus other resource-constraining controls
 
-## Cybersecurity Analogy
+| Control | What it constrains | Who sets it | Enforcement point | Prevents or reports | Scope |
+|---|---|---|---|---|---|
+| Service Quotas | Count and rate of resources per service | AWS, adjustable on request | The service itself, at API call time | Prevents, but the ceiling is AWS's | Account and Region |
+| Service Control Policies | Which API actions are permitted at all | Organization management or delegated admin | IAM authorization in member accounts | Prevents | Organization, OU, or account |
+| IAM policy conditions | Which resources a principal may create, with what attributes | Account administrator | IAM authorization | Prevents | Principal |
+| AWS Budgets and budget actions | Spend, with optional automated response | Account owner | Billing data, then an action | Reports, then acts after the fact | Account or Organization |
+| AWS Config rules | Whether existing resources match a desired state | Account or Organization | Evaluation after creation | Reports, with optional remediation | Account and Region |
+| Resource-level service limits (for example Lambda reserved concurrency) | A specific service's internal allocation | You | The service | Prevents | Per function or resource |
 
-Think of Service Quotas like a **governor on a high-speed engine**.
+## What gets tested
 
-Without it? The system could burn out or crash. In cloud security, quotas are like **circuit breakers**:
+- **Service Quotas does not enforce your policy, it reports AWS's limits.** If a question asks how to stop a team from creating more than a set number of resources, the answer is an SCP or an IAM condition, not a quota. Quotas are the wrong tool for expressing intent.
 
-- Prevent **resource exhaustion attacks**  
-- Limit damage from **misconfigured automation**  
-- Provide **containment during incident response**
+- **Quotas cap blast radius.** Conversely, when a scenario describes a compromised credential spinning up large numbers of instances, the existing quota is what bounded the damage, and the remediation discussion includes reviewing whether increases were granted without justification.
 
-You're not just limiting usage for billing — you're **limiting exposure**.
+- **Increases are per Region.** A multi-Region failover that fails because the standby Region has default limits is a classic scenario, and the answer is requesting increases in every Region in advance, ideally through a quota request template.
 
-## Real-World Analogy
+- **Quota request templates plus delegated administrator** is the answer for ensuring new Organization accounts start with adequate limits, tested alongside Control Tower and landing zone questions.
 
-Imagine you're managing a **corporate office building**:
+- **Non-adjustable quotas require architectural change.** If the limit cannot be raised, the answer is sharding across accounts or Regions, not a support case.
 
-- “Only 10 visitors per room”  
-- “Max 50 people on Floor 3”  
-- “5 printers per department max”
+- **CloudWatch alarms on the `AWS/Usage` namespace** are the answer for proactive warning. Answers relying on catching `LimitExceeded` errors are reactive by definition.
 
-These aren’t technical limits — they’re **administrative safeguards** to prevent chaos, fire hazards, or resource hogging.
+- **Security tooling quotas matter during an incident.** Trail count per Region, KMS requests per second, Lambda concurrency, GuardDuty and Security Hub ingestion, and Config rule evaluations all have limits, and hitting one during a response degrades the control silently.
 
-**Service Quotas = AWS’s version of those rules**:
+- **Restricting who can request increases** is the governance control, since an increase permanently removes a ceiling and there is no automatic mechanism to lower an applied value back down without a support request.
 
-- “No one can spin up a 96-core EC2 without approval.”  
-- “No dev team can create 1,000 IAM roles from a Terraform bug.”  
+## Limitations
 
----
+- It reports and requests, it does not enforce anything you define. There is no mechanism to set a lower internal limit through Service Quotas, so "cap this team at five instances" has to be built with IAM, SCPs, or tagging plus Config.
 
-## Types of Quotas
+- Usage data is not available for every quota. Some limits can only be discovered by hitting them, which makes proactive alarming impossible for that subset.
 
-| **Quota Type**         | **Description**                                           | **Examples**                             |
-|-------------------------|-----------------------------------------------------------|-------------------------------------------|
-| Service-Level Quotas    | Per-service resource limits                               | 20 EC2s per Region, 200 IAM Roles         |
-| Account Quotas          | Limits at the AWS Account level                           | 5,000 API Gateway RPS                     |
-| Hard Quotas             | Non-changeable limits (safety/infra reasons)              | 5 CloudTrail trails per Region            |
-| Soft Quotas             | Default limits — can be increased via request             | 75 S3 Buckets, 10K Lambda concurrency     |
-| Custom Quotas           | Internal rules + CloudWatch monitoring                    | 5 EC2s per team, 2 VPCs per project       |
+- Increase requests are asynchronous and some require human review, so they are not a remedy during an incident or a scaling emergency. Headroom must be requested before it is needed.
 
----
+- Applied values do not automatically propagate across Regions or to new accounts unless a quota request template is configured, and templates apply only to accounts joining after the template exists.
 
-## How It Works
+- Lowering an applied quota back down requires a support case. There is no self-service path to reduce a limit you previously raised, which means a generous increase is effectively permanent.
 
-With **Service Quotas**, you can:
+- Quota codes are opaque strings that differ per service and change rarely but not never, so automation referencing them needs the codes looked up rather than hardcoded from documentation.
 
-- View **current limits** per region & service  
-- Track **current usage** (where supported)  
-- Request **increases** via Console/API  
-- Set **CloudWatch alarms** when nearing limits  
+- Not all services participate. Some publish quotas only in their own documentation or console, so Service Quotas is close to but not actually a complete inventory of every limit that can break a deployment.
 
-### Example Flow
-
-1. You check and see 5 EIPs used out of 5 allowed  
-2. You request a quota increase to 10  
-3. AWS approves (automatic/manual depending on risk)  
-4. You get headroom, and optionally alarm at 8 EIPs used  
-
-You can also enable **Trusted Advisor alerts** for quota risk notifications.
-
----
-
-## Security & Operations Use Cases
-
-| **Scenario**                        | **Why Quotas Help**                                                               |
-|-------------------------------------|------------------------------------------------------------------------------------|
-| Prevent DoS from automation loops   | Stop infinite resource creation from buggy IaC                                     |
-| Limit blast radius per environment  | Separate quota ceilings for Dev/Test/Prod accounts                                 |
-| Audit privilege boundaries          | Understand what’s *possible*, not just what’s *allowed*                            |
-| Enforce cost ceilings               | Cap high-cost resources (e.g., EBS, EC2 instance families)                         |
-| Abuse prevention during a breach    | Stops attackers from deploying massive infra if access is gained                   |
-| Operational health tracking         | Use CloudWatch to detect quota nearing failure thresholds before outages           |
-
----
-
-## CloudWatch Integration
-
-You can create alarms based on **quota usage percentage**, like:
-
-- **80% EIP usage** → Notify security  
-- **IAM Role count near limit** → Alert ops  
-- **Block EC2 launches** when **custom quota exceeded**  
-
-This gives **predictive awareness** *before* you get hit with “LimitExceeded” errors.
-
----
-
-## Limit Increase Requests
-
-| **Step**                  | **Details**                                                                 |
-|---------------------------|------------------------------------------------------------------------------|
-| Manual via Console/API    | Use **"Request quota increase"** or CLI: `aws service-quotas`               |
-| Some auto-approved        | Others need **manual AWS review** (esp. high-risk changes)                  |
-| Per-region scope          | Quotas are often regional — increases apply **per region**, not global      |
-| Billing consideration     | Higher quotas = more usage potential → use as **cost guardrails**           |
-
-### Example CLI
-```bash
-aws service-quotas request-service-quota-increase \
-  --service-code ec2 \
-  --quota-code L-0263D0A3 \
-  --desired-value 20
-```
-
----
-
-## Key Features Table
-
-| **Feature**             | **Description**                                                              |
-|--------------------------|-------------------------------------------------------------------------------|
-| Dashboard View           | See all quota values across AWS services in one place                        |
-| Programmatic Access      | API + CLI support for automation, alerting, and visibility                   |
-| CloudWatch Integration   | Set alarms for usage thresholds                                               |
-| Custom Quotas            | Define internal rules (e.g., limit EC2 per team/project)                     |
-| Quota Increase Requests  | Request raises as team usage scales                                          |
-| Cross-Account Scope      | Use **delegated admin** in orgs to manage quotas centrally                   |
-
----
-
-## Final Thoughts
-
-**AWS Service Quotas** is more than a billing or DevOps tool — it’s a **security architecture pillar**.
-
-It:
-
-- Ensures **predictable growth**  
-- **Reduces surprise failures**  
-- Sets **clear governance boundaries**  
-- Helps **limit misconfigurations** and **cost overruns**
+- Rate quotas and throttling behave differently from count quotas. A count quota fails a creation call, while a rate quota returns a throttling error that a retrying client may mask entirely until the retry budget is exhausted, which delays detection.

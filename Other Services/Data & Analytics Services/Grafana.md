@@ -1,169 +1,76 @@
-# Grafana
+# Amazon Managed Grafana
 
-## What Is The Service
+Grafana is an open-source visualization and alerting layer that queries other systems on demand rather than storing telemetry itself. Amazon Managed Grafana is AWS's hosted version of it, with the operational burden removed and, more importantly for security work, the identity and network layers replaced by AWS primitives: authentication through IAM Identity Center or a SAML IdP, data source access through IAM roles rather than stored keys, and optional PrivateLink so the workspace is never reachable from the internet. Its security relevance is that it is the correlation surface across CloudWatch, Athena over CloudTrail and VPC Flow Logs, OpenSearch, Prometheus, and X-Ray, which means one workspace often has read access to nearly every telemetry source in an estate. That concentration is the risk as much as the value: the workspace IAM role is a cross-service read grant, and dashboards render data that individual viewers may not be entitled to see at the source. The thing to hold onto is that Grafana authorizes at the dashboard and folder level while the data source role authorizes at the AWS level, so anyone who can edit a panel can query anything the workspace role can reach.
 
-Grafana is an open-source observability and visualization platform used to build dashboards, alerts, and exploratory queries from multiple telemetry data sources — including CloudWatch, Prometheus, Loki, Elasticsearch, InfluxDB, AWS X-Ray, and many others.
+## How it works
 
-Grafana isn’t a database. It’s a frontend brain that helps you see, query, and correlate logs, metrics, and traces — regardless of where they live.
+- **Workspaces.** A workspace is the isolated Grafana instance. It is created with an authentication method, a set of permitted data sources and notification channels, an IAM role or service-managed permissions, and optionally a network access control list and VPC configuration. Everything else is configured inside the Grafana application.
 
-For Snowy and team, Grafana became the mission control dashboard — a single pane of glass across:
-- Multi-account AWS CloudWatch Logs and Metrics
-- VPC Flow Logs + GuardDuty alerts via Athena queries
-- Container metrics from Prometheus and ECS
-- Audit data from Elasticsearch or OpenSearch
-- Even SQL queries from RDS and Athena for governance
+- **Authentication.** Two options: IAM Identity Center, or SAML 2.0 against an external IdP such as Okta or Entra ID. There are no local Grafana user accounts to manage or leak. Users and groups are mapped to Grafana roles at assignment time.
 
-Whether you’re a security engineer watching for spikes, a platform engineer monitoring EKS memory, or an analyst reviewing login attempts — Grafana lets you see the patterns and act before damage spreads.
+- **Grafana roles.** Admin, Editor, and Viewer, assigned per user or group. Admin manages data sources, plugins, and permissions. Editor creates and modifies dashboards and, critically, can author arbitrary queries against any configured data source. Viewer can only see what has been built and shared with them.
 
----
+- **Fine-grained permissions.** Folder and dashboard level permissions restrict which teams see which dashboards. Data source permissions can restrict which roles may query a given source. This is the mechanism for separating, say, a platform team's metrics dashboards from a security team's CloudTrail dashboards inside one workspace.
 
-## Cybersecurity Analogy
+- **Data source authentication.** Managed Grafana assumes an IAM role in the workspace account and, through cross-account role chaining, roles in other accounts. Requests are SigV4-signed. There are no long-lived access keys stored in the workspace for AWS sources, which is the primary hardening advantage over self-hosted Grafana.
 
-Grafana is like the tactical operations center in a cyber defense bunker. It doesn’t store the war logs or conduct the operations — but it gives you:
-- A real-time map of what’s happening
-- Cross-panel visibility across logs, metrics, and traces
-- Alert sirens for anomalies or breaches
-- A place to overlay context, such as account ID, source IP, threat type, region, or user agent
+- **Service-managed versus customer-managed permissions.** Service-managed permissions have AWS provision and maintain the workspace role's policies, optionally scoped to an Organizational Unit for multi-account access. Customer-managed permissions give you a role you author yourself, which is what you use when the read scope needs to be narrower than the AWS-provided managed policies.
 
-Without it, you’re staring at thousands of logs in isolation.
-With it, you can correlate events, spot abnormal behavior, and track impact across the whole stack.
-It’s not your SIEM — but it’s often the first place you see the incident before it becomes a ticket.
+- **Network isolation.** Workspaces support a network access control list restricting inbound access by VPC endpoint or prefix list, so a workspace can be made reachable only from inside your network. Outbound connectivity into a VPC lets Grafana query private data sources such as a self-managed Prometheus or an OpenSearch domain with no public endpoint.
 
-## Real-World Analogy
+- **Grafana version and plugin management.** AWS pins supported Grafana major versions and controls upgrades, which removes the self-hosted patching burden for the many Grafana CVEs that have historically involved authentication bypass and path traversal. Plugin installation is restricted to an allowed set rather than arbitrary community plugins.
 
-Imagine you’re in a power grid control room. You’re not adjusting voltages or repairing towers — you’re watching dials, alerts, trends, and load across cities.
+- **Alerting.** Grafana-managed alert rules evaluate on a schedule and route through contact points such as SNS, Slack, PagerDuty, or a generic webhook. Contact point credentials are stored in the workspace configuration, which makes them a secret to rotate and a reason to prefer SNS with IAM over a static webhook token.
 
-Grafana is that control panel — except for:
-- Lambda error rates
-- CPU throttling
-- Auth API 500s
-- BGP flap counts
-- GuardDuty finding spikes
-- CloudTrail anomalies by region
+- **API keys and service accounts.** Workspaces issue tokens for programmatic access, used for dashboard-as-code pipelines. These are bearer credentials with a role attached and an expiry, and they bypass the SSO path entirely, which makes their lifecycle a real control.
 
-It’s a real-time heartbeat display of your AWS estate, and it's infinitely customizable.
+- **Logging.** CloudTrail records workspace-level API calls such as creation, permission updates, and data source configuration. Grafana application logs including login events and alerting activity can be exported to CloudWatch Logs, which is what gives you an audit trail of who logged in and what changed. Dashboard version history records edits inside the application.
 
----
+## Managed Grafana versus adjacent visualization and analysis surfaces
 
-## How It Works
+| Option | Data model | Identity | Data access authorization | Native audit of user activity | Cross-account and cross-source correlation |
+|---|---|---|---|---|---|
+| Amazon Managed Grafana | Queries sources live, stores nothing | IAM Identity Center or SAML | Grafana roles plus one workspace IAM role per data source | Grafana logs to CloudWatch, plus CloudTrail on the workspace | Strong, many source types in one panel set |
+| Self-hosted Grafana | Same | Local users, LDAP, OAuth, or SAML you configure | Whatever credentials you store on the instance | Whatever you configure | Same, but you own patching and secrets |
+| CloudWatch dashboards | CloudWatch metrics and Logs Insights | IAM only | IAM policy of the viewing principal | CloudTrail | CloudWatch cross-account observability, AWS sources only |
+| Amazon QuickSight | Cached SPICE or direct query | QuickSight users, IAM, or IdP | Row and column level security inside QuickSight | CloudTrail plus QuickSight events | Good for business data, weaker for live telemetry |
+| OpenSearch Dashboards | Indices in the domain | Fine-grained access control, IAM, or SAML | Index, document, and field level | Domain audit logs | Only what is indexed in the domain |
+| Security Hub and Detective | Findings and behavior graphs | IAM | IAM | CloudTrail | Purpose-built for security findings, not general telemetry |
 
-Grafana uses a plugin-based data source model. That means it doesn’t ingest or store data — it queries other systems on demand and visualizes the results.
+## What gets tested
 
-### Key Components
+- **Managed Grafana over self-hosted when the requirement mentions no long-lived credentials, SSO, or reduced patching burden.** The workspace assumes IAM roles rather than storing access keys, which is the standard answer to "eliminate static credentials in the dashboard layer."
 
-| Component       | Description                                                  |
-|----------------|--------------------------------------------------------------|
-| Data Sources    | Where Grafana fetches from (CloudWatch, Prometheus, etc.)    |
-| Panels          | Widgets like graphs, gauges, logs, tables                    |
-| Dashboards      | Layouts composed of panels                                   |
-| Variables       | Inputs like region/account to filter dashboards              |
-| Alert Rules     | Thresholds + conditions that trigger notifications           |
-| Organizations   | Multi-tenant separation within Grafana                       |
-| Users & Roles   | IAM-style access to dashboards, folders, and settings        |
+- **Editor role is a data access grant, not just an authoring grant.** Anyone who can create a panel can query the full scope of the workspace data source role. Restricting sensitive telemetry to a subset of users means either data source permissions, a separate workspace, or a narrower customer-managed role, not Viewer-only assignment on a dashboard.
 
-### Supported AWS Sources
+- **Customer-managed permissions when the workspace read scope must be narrower than the AWS managed policies.** Service-managed permissions are convenient and broad, which is exactly the distractor.
 
-- Amazon CloudWatch
-- Amazon Athena
-- Amazon OpenSearch Service
-- AWS X-Ray
-- AWS Timestream
-- AWS IoT SiteWise
+- **Network access control lists plus PrivateLink** are the answer for making a workspace unreachable from the internet. There is no security group on the workspace itself.
 
-All authenticated using:
-- Access/Secret Keys
-- IAM roles via EC2 metadata
-- AWS SigV4 plugin
+- **Cross-account observability** uses role chaining from the workspace role into a role in each target account, or service-managed permissions scoped to an OU when the accounts are in the same Organization.
 
-You can also self-host Grafana or use the fully managed **Amazon Managed Grafana (AMG)** service.
+- **Grafana is not a SIEM and not a log store.** If a question asks for retention, correlation rules, or a system of record for findings, the answer is Security Hub, OpenSearch, or a SIEM. Grafana is the presentation layer over those.
 
----
+- **API keys and service accounts bypass SSO.** Any question about an unattributable dashboard change or a leaked automation token points at token expiry, rotation, and restricting who can mint them.
 
-## Security And Compliance Relevance
+- **Contact point secrets** such as Slack webhooks are stored credentials. Prefer SNS with IAM authorization over a static webhook when the question emphasizes credential management.
 
-Grafana plays a critical role in security observability — but like all dashboards, it comes with attack surface:
+- **Enabling Grafana log export to CloudWatch** is the answer for auditing user logins and dashboard changes. CloudTrail alone covers the workspace API, not in-application activity.
 
-### Security Benefits
+## Limitations
 
-| Use Case                     | Grafana Role                                                                 |
-|-----------------------------|------------------------------------------------------------------------------|
-| Alerting on threats          | Trigger CloudWatch alarms or Prometheus alerts based on abnormal metrics    |
-| Audit trail visualization    | Ingest CloudTrail into Athena or OpenSearch, query it via dashboards        |
-| GuardDuty/Inspector dashboards | Surface severity-3+ findings by type, resource, or account               |
-| Data exfil alerting          | Build VPC Flow Log dashboards showing large egress volumes                  |
-| Correlating trace + log + metric | Use tempo/loki/prometheus trio for full triage stack                  |
-| Visual anomaly detection     | Zoom in on IAM policy changes, RDS connection attempts, etc.                |
+- Grafana stores no data, so retention, integrity, and immutability are properties of the underlying source. A dashboard cannot answer a question the source no longer retains.
 
-### Security Concerns
+- Authorization inside Grafana is not the same as authorization at the source. The workspace role queries with its own permissions regardless of who is viewing, so a viewer can see data they could not query directly in the console. Achieving true per-user data scoping requires separate workspaces or separate data sources.
 
-| Risk                          | Mitigation                                                                 |
-|------------------------------|---------------------------------------------------------------------------|
-| Exposed dashboards           | Restrict access with fine-grained roles or SSO                            |
-| Overprivileged data source roles | Use scoped IAM roles with read-only metrics/log permissions         |
-| Stored alert destinations (Slack/webhooks) | Rotate tokens and encrypt secrets using AWS Secrets Manager    |
-| Unlogged dashboard changes   | Enable version history and CloudWatch Logs for Managed Grafana           |
-| Unaudited access             | Integrate with SSO + CloudTrail (for AMG) to track admin behavior         |
+- No row-level or field-level security equivalent. Grafana can hide a dashboard but cannot filter query results by viewer identity for AWS data sources.
 
-Snowy’s team uses **Amazon Managed Grafana (AMG)** with **IAM Identity Center** (formerly SSO), CloudWatch log ingestion, and Athena queries on CloudTrail logs — all in dashboards that auto-rotate variables by account and region.
+- Alerting is threshold and query based. There is no correlation engine, no entity resolution, and no case management, so it detects the shape of a problem rather than reasoning about an incident.
 
----
+- Per-user licensing means the cost model discourages broad read access, which sometimes pushes teams toward shared accounts, which defeats attribution. Watch for that as an anti-pattern rather than a solution.
 
-## Pricing Model
+- Query cost is charged by the data source. A dashboard on a short refresh interval fanning out to CloudWatch Logs Insights or Athena is a recurring bill and can throttle the source during an incident, exactly when you need it.
 
-### 1. Self-Hosted Grafana
-- Free tier via OSS (Apache 2.0)
-- Costs come from:
-  - EC2/EKS hosting
-  - Data source API calls (e.g., CloudWatch)
-  - Alerting + webhook infra
+- Supported Grafana versions and plugins lag the open-source project, so a required community plugin may simply not be available.
 
-### 2. Amazon Managed Grafana (AMG)
-- $9/user/month (Editor)
-- $5/user/month (Viewer)
-- $0.01–$0.03 per alert evaluation
-- Ingest/query data is charged by source (CloudWatch/Athena/Prometheus)
-- Free tier available via AWS Console that integrates tightly with:
-  - AWS Organizations
-  - AWS SSO
-  - VPC access and PrivateLink
-
----
-
-## Real-Life Example (Snowy’s Security Observability Wall)
-
-Snowy’s team built a multi-account, multi-Region dashboard showing:
-- CPU usage and throttling across production Lambdas
-- Inspector critical findings grouped by service
-- CloudTrail-based dashboards filtering `PutPolicy`, `AssumeRole`, and `CreateUser` events
-- GuardDuty spike visualization (heatmap by region)
-- Route 53 query rate anomalies
-- VPC egress logs filtered for sensitive S3 destinations
-
-They pulled logs from:
-- CloudWatch Logs
-- Athena (for long-term queries)
-- Prometheus (for app metrics)
-- OpenSearch (for fast lookup)
-
-**Alert rules**:
-Notify Slack + email if:
-- VPC egress > 5GB to unapproved region
-- Inspector findings > 10 in any 5-minute window
-- CPU throttling on production Lambdas > 40%
-- Route 53 DNS queries spike beyond 2x baseline
-
-They applied IAM boundaries, private VPC endpoints, and role-based dashboard scoping per team.
-
----
-
-## Final Thoughts
-
-Grafana is not a SIEM. It’s not a log store. But it’s one of the most flexible, powerful visibility layers you can place in front of your telemetry stack — especially in environments where multi-account, multi-region, and multi-service data correlation is necessary.
-
-In **Snowy’s world** — where real-time observability and security are deeply intertwined — Grafana provides:
-- Secure, real-time visibility across accounts
-- Actionable alerting before an incident escalates
-- A common language between security, ops, and dev
-- Cross-source correlation from CloudWatch to Prometheus to Athena to X-Ray
-
-Whether you're hunting, auditing, monitoring, or tuning — **Grafana is often the first and last dashboard open** during every incident, deploy, or security review.
+- Data source connectivity into private networks requires the workspace VPC configuration, and each additional private source expands the network path that has to be maintained and reviewed.

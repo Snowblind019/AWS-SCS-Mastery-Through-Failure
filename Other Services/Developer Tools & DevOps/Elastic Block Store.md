@@ -1,171 +1,81 @@
-# Amazon EBS — Deep Dive
+# Amazon EBS
 
-## What Is the Service
+Amazon EBS provides block storage volumes attached to EC2 instances, presented to the operating system as raw disks. Its security character comes from three properties that make it unlike any other AWS storage service. It persists independently of the instance, so a terminated workload can leave its disk behind. It is trivially cloneable through snapshots, which are incremental, cheap, restorable in any Region, and shareable with other AWS accounts, which makes snapshot permissions a direct data exfiltration path that involves no network traffic and touches no security group. And its encryption is a creation-time property with no in-place conversion, which means the answer to almost every EBS encryption question is snapshot, copy with the target key, restore. The service also carries the primary forensic workflow in AWS incident response: isolate the instance, snapshot the volume, restore a copy in a sandbox account, and analyze the copy while the original stays untouched. The thing to hold onto is that the volume is only half the asset, since the snapshot is a portable, shareable, restorable copy of the same data governed by an entirely separate set of permissions.
 
-Amazon **EBS (Elastic Block Store)** is block-level storage for **EC2 instances**. Think of it like virtual hard drives you can attach, detach, snapshot, encrypt, back up, and clone.
+## How it works
 
-Each EBS volume is like a raw disk device — you mount it to an instance, format it with a file system (ext4, XFS, NTFS, etc.), and the instance reads/writes to it just like a physical disk.
+- **Volume scope and attachment.** A volume lives in one Availability Zone and attaches only to instances in that same AZ. Moving a volume across AZs or Regions means snapshotting and restoring. Multi-Attach on io1 and io2 allows one volume to attach to multiple Nitro instances simultaneously, which requires a cluster-aware filesystem and is a data integrity hazard otherwise.
 
-### Why it matters:
-- EBS volumes **persist beyond instance termination** (unless explicitly deleted)
-- You can **create snapshots for disaster recovery** and replicate across **AZs or Regions**
-- You can **encrypt at rest with KMS**, control access via **IAM**, and **tag volumes** for billing or automation
-- It’s foundational for **compliance-driven workloads** that need reliable, auditable storage with encryption, backup, and access control
+- **Volume types.** gp3 and gp2 for general purpose SSD, io1 and io2 for provisioned IOPS with io2 Block Express supporting the largest sizes and highest durability, st1 and sc1 for throughput-optimized and cold HDD. Type affects performance and cost, not the security model.
 
-EBS is the **backbone of persistent storage** in AWS — and your threat surface if it’s not locked down properly.
+- **Encryption at rest.** Enabled at volume creation using an AWS managed key `aws/ebs` or a customer managed KMS key. It covers data at rest on the volume, data in transit between the volume and the instance, all snapshots of the volume, and all volumes restored from those snapshots. Encryption cannot be enabled or disabled on an existing volume, and the key cannot be changed in place. The path is snapshot, copy the snapshot specifying the new key, create a volume from the copy.
 
----
+- **Encryption by default.** An account and Region setting that forces every new volume and every snapshot copy to be encrypted, with a configurable default KMS key. This is the single most effective EBS control and it is off unless enabled, which makes enabling it across every account and Region a standard baseline task.
 
-## Cybersecurity Analogy
+- **Snapshots.** Incremental point-in-time copies stored in S3-backed storage managed by AWS, not in your buckets. Only changed blocks are stored, but a restore always produces a complete volume. Snapshots can be copied within a Region, across Regions, and across accounts, and copying is where the key change happens.
 
-EBS is your **server’s internal drive** — meaning it contains sensitive data by design. But in the cloud, these drives are:
+- **Snapshot sharing.** `ModifySnapshotAttribute` grants another account permission to use a snapshot, or makes it public. An unencrypted snapshot can be made public, which is the classic catastrophic exposure. An encrypted snapshot cannot be made public at all, which is itself a control, and sharing an encrypted snapshot with a specific account additionally requires granting that account use of the customer managed key. Snapshots encrypted with the AWS managed `aws/ebs` key cannot be shared with another account.
 
-- **detachable**
-- **cloneable**
-- **restorable from snapshots**
-- **shareable across accounts** (with some constraints)
+- **Data Lifecycle Manager.** Policy-driven snapshot and AMI creation, retention, cross-Region copy, and cross-account sharing, targeted by tags. It also supports snapshot archive tiering and can enforce retention rules, which is how snapshot sprawl is controlled without a Lambda.
 
-If you don’t encrypt them, control snapshot access, or monitor detach/re-attach operations — **you’ve handed an attacker the ability to clone your disk and walk out the back door**.
+- **Snapshot Lock.** Snapshots can be locked in governance or compliance mode for a specified duration, preventing deletion during the lock period. Compliance mode locks cannot be shortened or removed after a cooling-off period, which makes it the WORM control for EBS backups and the ransomware protection for AMI and snapshot estates.
 
-## Real-World Analogy
+- **Recycle Bin.** Retention rules that hold deleted snapshots and AMIs for a defined period so they can be restored, which protects against accidental and malicious deletion.
 
-Imagine you're managing laptops for a company. Every laptop has a hard drive. Now imagine that any employee could:
+- **EBS direct APIs.** `ListSnapshotBlocks`, `ListChangedBlocks`, and `GetSnapshotBlock` read snapshot data directly without creating a volume or attaching an instance. This is how modern backup and forensic tooling reads snapshots efficiently, and it is also a data access path that bypasses the usual "restore a volume and mount it" pattern, so `ebs:GetSnapshotBlock` deserves its own IAM attention.
 
-- Clone their drive to a USB stick
-- Mail that USB to someone else
-- Restore that USB into a brand-new laptop
-- Do all of this silently unless you’ve set up logging, encryption, and access controls
+- **AWS Backup integration.** Centralized backup plans, cross-account and cross-Region copy, and Vault Lock for immutable retention, which is the alternative to Snapshot Lock when backups span multiple services.
 
-That’s what happens if you don’t treat **EBS** as a **sensitive, regulated asset**.
+- **Logging.** CloudTrail records `CreateVolume`, `AttachVolume`, `DetachVolume`, `CreateSnapshot`, `CopySnapshot`, `ModifySnapshotAttribute`, `DeleteSnapshot`, and the EBS direct API calls. With a customer managed key, the corresponding KMS `CreateGrant`, `GenerateDataKeyWithoutPlaintext`, and `Decrypt` calls also appear, which is a second signal that a volume or snapshot was accessed.
 
----
+## EBS versus adjacent storage options
 
-## How It Works (Under the Hood)
+| Option | Attachment model | Encryption change after creation | Portable copy mechanism | Cross-account sharing | Immutability control | Access audit |
+|---|---|---|---|---|---|---|
+| Amazon EBS | One AZ, one instance, or Multi-Attach on io1 and io2 | No, snapshot and copy required | Snapshots, incremental | Snapshot sharing plus KMS key grant | Snapshot Lock, Recycle Bin, Backup Vault Lock | CloudTrail on API, no per-block read log except direct APIs |
+| EC2 instance store | Physically attached, ephemeral | Always encrypted on Nitro, no key control | None, data is lost on stop | None | Not applicable | None |
+| Amazon EFS | Many instances, multi-AZ | No, immutable at creation | AWS Backup only | No native sharing | Backup Vault Lock | CloudTrail on mount authorization only |
+| Amazon FSx | Many clients, protocol dependent | No, immutable at creation | Backups, ONTAP SnapMirror | Limited | SnapLock on ONTAP, Backup Vault Lock | Windows File Server only |
+| Amazon S3 | API, no attachment | Yes, changeable per object | Replication, copy | Bucket policy, access points | Object Lock, compliance mode | CloudTrail data events, per object |
 
-EBS volumes live in an **Availability Zone** (not Region-wide) and can only be attached to EC2 instances in the same AZ.
+## What gets tested
 
-### Each volume has the following core attributes:
+- **Encryption cannot be added to an existing volume.** The answer is always snapshot, copy the snapshot with the KMS key, create a new volume, and swap it in. This mirrors RDS, Aurora, EFS, and FSx and is the most repeated pattern in the exam.
 
-| Attribute           | Description                                             |
-|--------------------|---------------------------------------------------------|
-| Type               | `gp3`, `gp2`, `io1`, `io2`, `st1`, `sc1`, etc.          |
-| Size               | 1 GiB – 16 TiB per volume                              |
-| Throughput & IOPS  | Configurable (especially for `gp3`, `io1`, `io2`)       |
-| Encryption         | Optional at creation; uses **KMS**                     |
-| Snapshots          | Point-in-time backups to S3                             |
-| Multi-Attach       | Some volumes (like `io1/io2`) can attach to multiple EC2s simultaneously (risky for most apps) |
+- **Encryption by default is an account and Region setting.** Enforcing it estate-wide combines that setting with an SCP denying `ec2:CreateVolume` and `ec2:CopySnapshot` when `ec2:Encrypted` is false, plus a Config rule for detection.
 
-Volumes can be:
-- Mounted to a single EC2
-- Detached and moved
-- Snapshotted and restored
-- Copied across accounts or regions
-- Encrypted or unencrypted (no in-place conversion)
+- **Public snapshots are the exposure to hunt.** The remediation is `ModifySnapshotAttribute` removing the `all` group. The preventive controls are encryption by default, since encrypted snapshots cannot be made public, plus an SCP denying `ec2:ModifySnapshotAttribute` where `ec2:Add/group` is `all`.
 
----
+- **Cross-account snapshot sharing needs both the snapshot permission and the KMS key grant.** A snapshot encrypted with `aws/ebs` cannot be shared at all, and the fix is copying it to a customer managed key first.
 
-## Security Considerations
+- **Forensic workflow order matters.** Isolate the instance with a restrictive security group, capture memory before stopping if volatile evidence is needed, snapshot the volume, copy the snapshot to a forensics account, restore in an isolated VPC, and analyze the copy. Working on the original volume destroys evidence.
 
-EBS is deceptively simple — but there are many **attack surfaces** and **compliance requirements** you need to control:
+- **Snapshot Lock in compliance mode** is the answer when snapshots must survive a compromised administrator, alongside Backup Vault Lock for a multi-service estate. Recycle Bin is the answer for accidental deletion, not for a determined attacker.
 
-| Concern                    | Mitigation                                                                 |
-|---------------------------|----------------------------------------------------------------------------|
-| Unencrypted volumes       | Enforce encryption by default via Launch Templates or **SCPs**             |
-| Exposed snapshots         | Private by default — audit `CreateSnapshotPermission` and share policies |
-| Snapshot cross-account copy | Use `kms:EncryptionContext` and deny `ec2:CopySnapshot` in IAM         |
-| Snapshot theft            | Deny `ec2:ModifySnapshotAttribute` unless absolutely needed               |
-| Detached volumes in prod  | Monitor via **EventBridge + CloudTrail** (`DetachVolume`, `AttachVolume`) |
-| Uncontrolled restoration  | Watch for `CreateVolume`, `CreateVolumeFromSnapshot`                      |
+- **`ebs:GetSnapshotBlock` and the direct APIs** are a read path that does not require creating a volume, so restricting `ec2:CreateVolume` alone does not prevent snapshot data access.
 
-Security is not about just encrypting — it’s about **controlling who can access volume contents, snapshots, and creation flows**.
+- **`kms:ViaService` scoping** limits a role's use of a key to EBS operations specifically, which is the standard hardening when a role needs decrypt only for volume attachment.
 
----
+- **Detached volumes and orphaned snapshots** are both cost and data-retention findings. A volume detached from a terminated instance still holds whatever was on it, encrypted or not, and is invisible to most workload-oriented scanning.
 
-## EBS Encryption
+- **`DeleteOnTermination`** on the root volume defaults to true and on attached volumes defaults to false, which is why data survives instance termination unexpectedly.
 
-- At-rest encryption via **KMS**
-- Encrypted snapshots → create encrypted volumes
-- Can share encrypted snapshots across accounts (if **KMS** policy allows)
-- Cannot encrypt existing unencrypted volumes (must create new encrypted copy)
+## Limitations
 
-### You can encrypt using:
-- **AWS-managed keys** (`aws/ebs`)
-- **Customer-managed CMKs** (for tighter control and cross-account security)
+- Encryption is a creation-time property. There is no in-place enable, disable, or re-key, so every encryption change is a snapshot, copy, restore, and cutover.
 
-### Audit and restrict usage with:
-- **KMS** key policies
-- **IAM** policies using `kms:ViaService`, `kms:EncryptionContext`, `ec2:CreateVolume`
-- **AWS Config** rules like `encrypted-volumes` and `encrypted-snapshots`
+- Snapshots are a copy of the data governed by an entirely separate permission set. Locking down the volume does nothing about a snapshot already shared with another account, and revoking sharing does not recall a copy that account already made.
 
----
+- A volume is bound to one Availability Zone and, except for Multi-Attach, one instance. Moving data means snapshot and restore, which produces additional copies to track.
 
-## Visibility and Monitoring
+- There is no per-read or per-write audit of volume contents. Once a volume is attached, everything the instance does with it is invisible to AWS logging, so file-level activity depends on OS auditing.
 
-### Use **CloudTrail** to track:
-- `CreateVolume`
-- `AttachVolume`, `DetachVolume`
-- `CreateSnapshot`, `DeleteSnapshot`, `ModifySnapshotAttribute`
-- `CopySnapshot`, `ShareSnapshot`
-- **KMS** decrypt events via **CloudTrail + CloudWatch Logs**
+- Multi-Attach shares a block device between instances with no coordination. Without a cluster-aware filesystem the result is silent corruption, and it is not a substitute for EFS.
 
-### Use **AWS Config** to track drift:
-- Unencrypted volumes
-- Unattached volumes
-- Non-compliant snapshots
-- Insecure snapshot permissions
+- Encrypted snapshot sharing depends on KMS key policy across accounts, which is a frequent source of failed restores during a real incident when the forensics account cannot decrypt the snapshot it was given.
 
-### Use **CloudWatch** for performance metrics like:
-- Volume throughput
-- Queue depth
-- Burst credits for `gp2`
-- Latency spikes on I/O-intensive workloads
+- Snapshot storage is incremental and deduplicated, which makes deletion semantics unintuitive: deleting a snapshot does not necessarily reclaim its apparent size, and retention policies are easier to get wrong than they look.
 
----
+- Instance store volumes attached to the same instance are not EBS, are not snapshotted, and are lost on stop, which surprises teams assuming all attached storage is durable.
 
-## Pricing Model
-
-EBS pricing depends on:
-
-| Component              | Example Price (varies by region)                    |
-|------------------------|----------------------------------------------------|
-| `gp3` volume storage   | $0.08 per GB-month                                 |
-| IOPS (`gp3`)           | $0.005 per provisioned IOPS-month                  |
-| Throughput (`gp3`)     | $0.04 per MB/s-month                               |
-| Snapshots              | $0.05 per GB-month (deduplicated)                 |
-| Cross-region copies    | Additional transfer and storage costs              |
-| Encryption (CMK usage) | $1.00/month per CMK, $0.03 per 10k requests        |
-
-### Pro tips:
-- **Delete unused volumes** — they bill even if detached
-- **Snapshots are incremental** — only deltas cost money
-- Use **Data Lifecycle Manager (DLM)** to automate snapshot pruning
-
----
-
-## Real-Life Example: Snowy’s Forensic Workflow
-
-Let’s say an EC2 instance in `prod-analytics` crashes during an anomaly spike.
-
-**Snowy’s** incident response playbook includes:
-- Detach **EBS** volume from the EC2
-- Create a **snapshot** for forensic imaging
-- Use `CreateVolume` to restore a copy in an isolated “sandbox” **VPC**
-- Mount it to a hardened EC2 instance with no internet access
-- Run malware scans, log parsing, memory dump analysis
-- Once reviewed, retain the snapshot for audit, and **encrypt with a CMK** before archiving
-
-All access is **logged via CloudTrail**, **restricted by IAM**, and **tagged for compliance**.
-
----
-
-## Final Thoughts
-
-Amazon **EBS** is simple on the surface — just storage — but _every compromise starts at the disk_. If you don’t monitor snapshots, control encryption, or audit volume restores, you’ve left the keys to your kingdom lying on a detachable USB stick.
-
-- Always encrypt
-- Audit snapshot policies
-- Monitor attach/detach activity
-- Track **CMK** usage
-- Use automation for lifecycle and compliance
-
-**EBS is not just storage — it’s a potential data exfiltration path, compliance timebomb, and forensic goldmine. Treat it that way.**
+- Restoring a large snapshot produces a volume whose blocks are lazily loaded from S3, so first-touch performance is degraded until the volume is fully hydrated or initialized, which matters during a time-sensitive recovery.

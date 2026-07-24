@@ -1,175 +1,76 @@
 # Amazon QuickSight
 
-## What Is The Service
+Amazon QuickSight is AWS's managed business intelligence service: datasets defined over Athena, Redshift, RDS, S3, or an uploaded file, visualizations built on top of them, and dashboards shared with people who never touch the AWS console. In a security context it is the reporting tier over an existing detection pipeline, turning CloudTrail in Athena, GuardDuty findings in S3, and VPC Flow Log summaries into trend views for leadership and non-engineering stakeholders. Its own security model deserves attention because QuickSight is one of the few AWS services with a real user directory of its own: it maintains users and groups, it can authenticate them through IAM, IAM Identity Center, SAML, or its own accounts, and it can share a dashboard with someone who has no IAM identity at all. It also caches data. SPICE holds a materialized copy of query results inside QuickSight, which means data governed by Lake Formation at the source may sit unfiltered in a cache with a completely separate permission model. The thing to hold onto is that QuickSight has its own identity store and its own copy of the data, so source-level access controls do not automatically follow the data into a dashboard.
 
-**Amazon QuickSight** is a cloud-native Business Intelligence (BI) and visualization service that enables you to create interactive dashboards, visual reports, and advanced analytics from diverse data sources — including **S3**, **Athena**, **Redshift**, **RDS**, and more.
+## How it works
 
-For **security operations** and **cloud security engineering**, QuickSight transforms massive log volumes into intuitive dashboards, helping teams move from “log parsing” to **security insight**. You can:
+- **Account and namespaces.** QuickSight is enabled per AWS account in a chosen home Region. Namespaces provide hard tenant isolation, with users, groups, and assets in one namespace unable to see or be shared with another. This is the mechanism for multi-tenant deployments such as an MSSP serving separate customers.
 
-- Track **IAM role usage** over time  
-- Visualize **GuardDuty findings**  
-- Chart **CloudTrail activity by region**  
-- Spot **API anomalies or spikes**  
-- Filter **VPC flow logs** for suspicious traffic patterns  
+- **Identity model.** Users are QuickSight principals, provisioned through IAM federation, IAM Identity Center, SAML 2.0 against an external IdP, an Active Directory connection on Enterprise edition, or QuickSight-native accounts on Standard edition. Roles are Admin, Author, and Reader, with Reader being view-only and Author able to create datasets and therefore able to query the data source.
 
-QuickSight becomes your **security visibility layer**, sitting on top of Athena, CloudTrail, or S3-based pipelines — without needing to manage BI infrastructure.
+- **Data source connections.** A data source stores connection details and credentials. For AWS sources it uses either the QuickSight service role or an explicitly specified IAM role, which is the more controllable option. For private VPC sources it uses a VPC connection with an ENI in your subnets and a security group, which is required to reach an RDS instance or Redshift cluster with no public endpoint.
 
----
+- **SPICE.** An in-memory columnar cache holding a materialized copy of the dataset, refreshed on a schedule or incrementally. Queries hit the cache rather than the source. SPICE is encrypted at rest, on Enterprise edition with a customer managed KMS key. The consequence for security is that the cache is a second copy of the data with its own lifetime and its own access path.
 
-## Cybersecurity and Real-World Analogy
+- **Direct query.** The alternative, sending every visual's query to the source at view time. Slower and load-generating, but the data is never copied and source-level controls stay in the path.
 
-**Cybersecurity Analogy:**  
-Imagine you're a CISO overseeing 100+ AWS accounts. Logs are flooding in: auth attempts, role assumptions, region access, S3 downloads. You can’t manually inspect it all.
+- **Row-level and column-level security.** Enterprise edition. RLS attaches a rules dataset mapping user or group names to permitted field values, filtering rows per viewer. Column-level security restricts which fields a principal can see at all. Both are enforced by QuickSight, not by the source, and both apply to SPICE and direct query datasets.
 
-QuickSight is your **Security Situation Dashboard** — distilling logs into visual patterns, surfacing spikes, and guiding your team’s next response.
+- **Asset-level permissions.** Datasets, analyses, dashboards, and folders each carry a permissions list naming users and groups. Sharing a dashboard does not share the underlying dataset, so a Reader can see the visuals without being able to build new queries against the data.
 
-**Real-World Analogy:**  
-It’s like a NASA mission control dashboard. You don’t analyze every line of telemetry — you need the red light to flash when something’s off. QuickSight gives you **signal from the noise**, visually.
+- **Embedding.** Dashboards can be embedded in an application. Registered-user embedding issues a short-lived embed URL for a known QuickSight principal. Anonymous embedding issues a URL for a session with no identity, scoped by session tags that drive RLS. Anonymous embedding is how you serve a dashboard to end users with no AWS or QuickSight account, and the session tag becomes the entire authorization boundary.
 
----
+- **Encryption.** In transit with TLS everywhere. At rest, SPICE and QuickSight-managed metadata are encrypted, with customer managed KMS keys supported on Enterprise edition. Source data remains under its own encryption.
 
-## Core Features and Capabilities
+- **Network.** VPC connections for private data sources. IP restriction rules can limit which source addresses may access the QuickSight account, and Enterprise edition supports access through an interface VPC endpoint so users reach QuickSight without traversing the internet.
 
-| Feature                | Explanation                                                                 |
-|------------------------|-----------------------------------------------------------------------------|
-| **Serverless & Scalable** | No infrastructure to manage. Scales from 1 user to thousands.            |
-| **Pay-per-session pricing** | Only pay when someone views a dashboard.                            |
-| **SPICE Engine**       | In-memory caching engine for fast filtering and querying.                   |
-| **ML Insights**        | Built-in anomaly detection, forecasting, and natural language queries.      |
-| **Embedded Dashboards**| Securely embed into internal tools or web apps.                             |
-| **Row-Level Security** | Restrict data visibility per user/team/account.                             |
-| **Federated SSO**      | Supports IAM federation, AD, and SAML (SSO integration).                    |
+- **Logging.** CloudTrail records QuickSight API activity including user provisioning, dataset and dashboard creation, permission changes, and, notably, dashboard views and data exports, which is what makes viewing attribution possible. CloudTrail is the only audit surface; there is no separate QuickSight audit log.
 
----
+## QuickSight versus adjacent presentation and query surfaces
 
-## QuickSight Workflow in a Security Context
+| Option | Data handling | Identity | Per-viewer data filtering | Reaches non-technical viewers | Audit of views and exports |
+|---|---|---|---|---|---|
+| Amazon QuickSight | SPICE cache or direct query | Own user store, federated via IAM, Identity Center, or SAML | Row and column level security, session tags for anonymous embedding | Yes, that is the point | CloudTrail includes views and exports |
+| Amazon Managed Grafana | Queries live, stores nothing | IAM Identity Center or SAML | None for AWS sources, dashboard permissions only | Possible but operationally oriented | Grafana logs to CloudWatch plus CloudTrail |
+| Athena directly | Queries S3 in place | IAM | Lake Formation row, column, and cell filters | No, requires console or SQL client | CloudTrail plus Lake Formation events |
+| CloudWatch dashboards | CloudWatch data | IAM | None, IAM of the viewer applies | Requires console access | CloudTrail |
+| Security Hub | Findings store | IAM | None beyond account and Region | Console only | CloudTrail |
+| OpenSearch Dashboards | Indexed copy in the domain | Fine-grained access control, IAM, SAML | Document and field level | Yes, with dashboards | Domain audit logs |
 
-### **Data Sources**
+## What gets tested
 
-- CloudTrail, ALB, and VPC Flow Logs in **Amazon S3**  
-- **Athena** queries over structured formats (Parquet, JSON, CSV)  
-- **RDS/Redshift** for centralized SIEM-style storage  
-- 3rd-party SIEM exports or data lake integrations
+- **SPICE is a copy of the data.** Any question about Lake Formation or source permissions not applying in a dashboard is answered by that fact. To keep source enforcement in the path, use direct query. To enforce per-viewer scoping regardless, use QuickSight row-level security.
 
-### **Data Preparation**
+- **Row-level security is the multi-tenant answer within one dashboard.** Namespaces are the answer when tenants must not even share an asset space, which is the stronger isolation and the correct choice for an MSSP or a customer-facing deployment.
 
-- Define datasets via QuickSight UI or CLI  
-- Create **calculated fields** (e.g., `GeoLocationFromIP`)  
-- Join datasets (e.g., GuardDuty findings + VPC logs)
+- **Anonymous embedding relies entirely on session tags.** The application generating the embed URL is the authorization decision point, so the answer to preventing cross-tenant data exposure is correct session tag assignment plus RLS keyed to those tags, not a network control.
 
-### **SPICE Optimization**
+- **Author role is a data access grant.** An Author can create a new dataset against any data source they can see and query it freely. Restricting sensitive data means restricting the data source or the dataset, not assigning fewer dashboards.
 
-- Load high-volume data into SPICE for speed  
-- Schedule refreshes every 30 min or hourly
+- **Private data sources need a VPC connection**, with an ENI and a security group. A public endpoint on RDS is always the wrong remediation.
 
-### **Visualizations**
+- **Customer managed KMS key for SPICE is Enterprise edition.** Any requirement for control over the encryption key of cached analytics data rules out Standard edition.
 
-- **Time series** (API calls over time)  
-- **Heat maps** (geo-login attempts)  
-- **Pie charts** (top users triggering GuardDuty)  
-- **Tables** with conditional formatting (failed logins, deletions)
+- **CloudTrail captures dashboard views and exports**, which is what satisfies "we must know who viewed the compliance report." That is a genuine differentiator against Grafana, where per-view attribution is weaker.
 
-### **Publishing Dashboards**
+- **IP restriction rules and the VPC endpoint** are the answers for limiting where QuickSight can be reached from, and they operate at the account level rather than per dashboard.
 
-- Share with **IAM** or **federated users**  
-- **Embed** into internal SOC tools or portals  
-- Use **Row-Level Security (RLS)** for scoped data views
+- **QuickSight is not a detection service.** If a question asks for finding generation, correlation, or alerting on security events, the answer is GuardDuty, Security Hub, or EventBridge. QuickSight reports on what those produce.
 
----
+## Limitations
 
-## Security Use Cases
+- SPICE creates a second copy of the data outside the governed source, with its own refresh schedule, its own key, and its own permissions. Deleting a record at the source does not remove it from SPICE until the next refresh, which is a real gap for data deletion requests.
 
-### **1. CloudTrail Event Visualization**
-- Use Athena to query API call summaries
-- Import into QuickSight to show:
-  - Top-called APIs
-  - Users doing `Delete*` operations
-  - Usage in non-standard AWS regions
+- Row-level and column-level security, customer managed keys, namespaces, VPC endpoints, and Active Directory integration are Enterprise edition only. Standard edition is inadequate for most regulated deployments.
 
-### **2. GuardDuty Findings Monitoring**
-- Send findings to S3 (or via Kinesis Firehose)
-- Visualize in QuickSight:
-  - Top finding types
-  - Malicious IPs
-  - Finding frequency per account
+- QuickSight enforces RLS itself. A misconfigured rules dataset fails open in the sense that missing rules for a user typically means no rows rather than all rows, but an over-broad rule silently grants access with no error.
 
-### **3. IAM Role Assumption Patterns**
-- Chart `AssumeRole` activity over time  
-- Spot outliers (e.g., admin role used at 3 AM on a Saturday)
+- SPICE has per-dataset size and row limits and refresh frequency limits, so very large or near-real-time security datasets push you to direct query, which then loads the source during every dashboard view.
 
-### **4. S3 Bucket Access Monitoring**
-- Combine CloudTrail + access logs
-- Track which roles/IPs access sensitive buckets
+- Direct query cost and load fall on Athena or the database. A widely shared dashboard on a short refresh can become an expensive and throttling workload on the same Athena workgroup used for incident response.
 
-### **5. Login Activity Anomaly Detection**
-- Correlate login failures across IPs, regions
-- Use ML insights to detect **MFA brute-force spikes**
+- Reader pricing is per session, so broad distribution has a variable cost that occasionally pushes teams toward shared accounts, which destroys the view attribution CloudTrail would otherwise give.
 
----
+- Cross-Region behavior is awkward: the QuickSight account has a home Region, and querying data in other Regions works but adds transfer cost and latency, while some features remain Region-bound.
 
-## SPICE vs Direct Query
-
-| Engine         | Description                                                                 |
-|----------------|-----------------------------------------------------------------------------|
-| **SPICE**       | In-memory cache; fast, good for large data + filtering                     |
-| **Direct Query**| Hits live source each time; real-time but slower and load-dependent        |
-
-✅ **Use SPICE** for dashboards like daily GuardDuty trends  
-✅ **Use Direct Query** for live dashboards (e.g., login spikes, ongoing attack monitoring)
-
----
-
-## Security Features
-
-### **IAM Integration**
-- Access controlled via **IAM roles**, **SAML**, or **Active Directory**  
-- Uses **STS** under the hood for secure session-based auth
-
-### **Row-Level Security (RLS)**
-- Share one dashboard, scope visibility  
-- Example: Dev team only sees their own Lambda metrics
-
-### **Audit Trail**
-- QuickSight activity is logged in **CloudTrail**  
-- Track dashboard views, exports, dataset modifications
-
-### **Encryption**
-- **Data at rest** encrypted using AWS **KMS**  
-- **Data in transit** encrypted via **TLS**
-
----
-
-## Pricing Overview
-
-| Component        | Pricing Model                                                    |
-|------------------|------------------------------------------------------------------|
-| **Authors**      | Monthly per-user fee (can build dashboards, datasets)           |
-| **Readers**      | Pay-per-session (30-min increments per active viewer)           |
-| **SPICE Capacity** | Billed per GB/month (used for caching and speed)              |
-| **ML Insights**  | Extra cost for built-in forecasting or anomaly detection        |
-
-> **Tip:** Set usage alerts or view session consumption for cost monitoring.
-
----
-
-## Benefits in a Cloud Security Architecture
-
-- **Athena is your brain. QuickSight is your eyes.**  
-- **Live reporting** to stakeholders without console access  
-- **Secure embedded dashboards** for SOC or DevSecOps teams  
-- **Multi-tenant dashboards** with RLS — useful in MSSP or multi-account orgs  
-
----
-
-## Final Thoughts
-
-QuickSight is the **visualization tier** of your AWS-native security pipeline.
-
-While it doesn’t detect or ingest logs itself, it’s *essential* for:
-
-- Communicating trends to leadership  
-- Surfacing anomalies to responders  
-- Allowing non-engineering stakeholders to engage with threat posture  
-
-If you're already using Athena, CloudTrail, or GuardDuty, consider QuickSight your **real-time, secure, and shareable lens** into what’s happening in your AWS environment.
-
+- The QuickSight user directory is separate from IAM. Deprovisioning a user in the corporate IdP does not necessarily remove the QuickSight user or their asset ownership, so offboarding requires an explicit step.

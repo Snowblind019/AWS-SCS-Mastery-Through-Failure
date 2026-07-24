@@ -1,179 +1,72 @@
-# Prometheus
+# Amazon Managed Service for Prometheus
 
-## What Is the Service
+Prometheus is an open-source time-series metrics system built around a pull model: a server scrapes HTTP endpoints exposing metrics in a text format, stores the samples in a local time-series database, and evaluates PromQL queries and alerting rules against them. Amazon Managed Service for Prometheus is the hosted version, replacing the self-managed server and its storage with a workspace that speaks the same remote-write and query APIs, and replacing Prometheus's near-total absence of built-in security with AWS primitives: SigV4-signed requests authorized by IAM, encryption at rest with a customer managed KMS key, and reachability restricted to a VPC through an interface endpoint. That substitution is the entire security story. Open-source Prometheus has no authentication, no authorization, no transport encryption, and no multi-tenancy by default, so a self-hosted deployment is only as protected as the network and reverse proxy in front of it. Managed Prometheus also matters for detection engineering because runtime signals such as restart storms, CPU saturation, and abnormal egress volume show up in metrics well before they show up in findings. The thing to hold onto is that Prometheus security is entirely perimeter and identity work, so the managed service's value is that IAM replaces the reverse proxy you would otherwise have to build and defend.
 
-Prometheus is a time-series metrics collection and storage system designed for reliability, scalability, and real-time alerting. It’s open-source, cloud-native, and purpose-built for **pull-based metric scraping** — which makes it perfect for environments where you need full visibility into every container, service, pod, and process.
+## How it works
 
-Unlike CloudWatch or other push-based services, Prometheus **actively scrapes** data from endpoints that expose metrics in a specific format (`/metrics`), usually over HTTP. It stores those metrics as time-series data, and lets you run rich queries with its **PromQL** language.
+- **Workspaces.** A workspace is the isolated tenant boundary: its own metric store, its own alert manager definition, its own IAM resource ARN, and optionally its own KMS key. Separating teams or environments means separate workspaces, since there is no in-workspace tenancy model.
 
-**Snowy’s team uses Prometheus for:**
+- **Ingestion through remote write.** Managed Prometheus does not scrape. A collector does the scraping and forwards samples over the Prometheus remote-write API. The collector is either an AWS managed scraper for EKS, an OpenTelemetry Collector or ADOT distribution, or a self-managed Prometheus server in agent mode. Every remote-write request is SigV4-signed with `aps:RemoteWrite`.
 
-- Monitoring EKS cluster health  
-- Collecting per-pod memory, CPU, and network metrics  
-- Alerting on container failures or degraded performance  
-- Building deep, custom Grafana dashboards  
-- Providing real-time anomaly detection when AWS metrics are too slow or too generic  
+- **AWS managed collector for EKS.** A fully managed scraper that discovers pod and service targets in an EKS cluster and writes to a workspace, removing the need to run and secure a Prometheus server in the cluster. It uses an ENI in your VPC and a service-linked role, and requires the cluster's `aws-auth` or access entry configuration to grant it discovery permissions.
 
----
+- **Query and IAM authorization.** PromQL queries go through `aps:QueryMetrics` on the workspace ARN. There is no user database and no API token. Grafana, a CLI, or an application queries with an IAM identity, which means query access is granted and revoked with policy rather than with a shared credential.
 
-## Cybersecurity Analogy
+- **Encryption.** At rest with an AWS owned key by default or a customer managed KMS key specified at workspace creation and immutable thereafter. In transit with TLS on both ingestion and query paths, with no plaintext option.
 
-Think of Prometheus like a **stealth surveillance drone**. It flies over your architecture every 15 seconds, collecting information from each node, service, and system that has an exposed `/metrics` port.
+- **Network isolation.** The workspace API is reachable through an interface VPC endpoint, and the endpoint policy plus an IAM condition on `aws:SourceVpce` is how you restrict ingestion and query to your network. Without that, the workspace is reachable from any network by any principal holding the right IAM permissions.
 
-It doesn’t wait for logs to be pushed. It actively pulls structured telemetry, stores it locally, and gives you an on-demand querying interface.
+- **Rules and alerting.** Recording rules precompute expensive expressions, and alerting rules fire when a PromQL expression holds for a duration. Both are uploaded as rule group namespaces. The managed Alertmanager routes firing alerts to SNS, and from SNS to Lambda, Chatbot, email, or a paging system. Alertmanager configuration including inhibition, grouping, and silences is uploaded as a definition.
 
-And if anything suspicious shows up — like:
+- **Logging.** CloudTrail records workspace creation, KMS key configuration, rule namespace changes, and Alertmanager definition changes. Ingestion and query API calls at volume are not individually logged, so attribution for a specific query is not available. Workspace logs including rule evaluation failures can go to CloudWatch Logs.
 
-- A sudden CPU spike  
-- An unusual restart count  
-- A process using 5× more memory than usual  
+- **Retention and scale.** Metrics are retained 150 days with no configuration. Ingestion, active series, and query limits are per-workspace quotas that can be raised, and cost is driven by samples ingested, storage, and query samples processed.
 
-…it raises an alert and hands it off to Alertmanager, Slack, PagerDuty, or whatever system you’ve wired up.
+- **Exporters and instrumentation.** The metrics themselves come from exporters: `node_exporter` for host metrics, `kube-state-metrics` for Kubernetes object state, cAdvisor for container resource usage, `blackbox_exporter` for synthetic probes, and application SDK instrumentation. Each exporter is an HTTP endpoint that, unprotected, discloses detailed internal topology and resource state, which is why exporter exposure is a real finding and not a hygiene note.
 
-In a threat-driven world, this is **tactical telemetry** — you see the anomaly before it becomes an incident.
+## Managed Prometheus versus adjacent metrics and telemetry services
 
-## Real-World Analogy
+| Option | Collection model | Authentication | Encryption at rest | Retention | Multi-tenancy | Query language |
+|---|---|---|---|---|---|---|
+| Amazon Managed Service for Prometheus | Remote write from a collector | IAM SigV4, no user accounts | KMS, customer managed key optional | 150 days, fixed | One workspace per tenant | PromQL |
+| Self-hosted Prometheus | Direct scrape by the server | None natively, proxy required | Whatever the volume provides | Configurable, local disk bound | None, separate servers required | PromQL |
+| CloudWatch metrics | Push from agents and services | IAM | AWS managed | 15 months, rolled up over time | Account and namespace | Metric math and Logs Insights |
+| Amazon Managed Grafana | Queries other sources | IAM Identity Center or SAML | Not a store | Not a store | Folders, dashboards, data source permissions | Per data source |
+| OpenSearch | Indexed ingestion | Fine-grained access control, IAM, SAML | KMS | Configurable, storage bound | Index and document level | Query DSL and PPL |
+| ADOT and OpenTelemetry | Collector, agent or gateway | Depends on the backend | Depends on the backend | Depends on the backend | Depends on the backend | Depends on the backend |
 
-Prometheus is like a **security patrol team** that walks the floor of a data center every 10 seconds, checking every machine’s temperature, power use, and uptime.
+## What gets tested
 
-Unlike passive logs (which are like surveillance footage you review later), Prometheus is **active and structured**:
+- **Managed Prometheus over self-hosted when the requirement mentions authentication, encryption, or eliminating an unauthenticated endpoint.** Open-source Prometheus has no auth, so the self-hosted answer always requires building a reverse proxy with OIDC or mTLS in front of it, which is the more complex distractor.
 
-- “This pod is using 95% of its limit.”  
-- “This node has failed 4 readiness probes in a row.”  
-- “This EBS volume is taking 10× longer to attach.”  
+- **IAM is the only authorization mechanism.** `aps:RemoteWrite` for ingestion, `aps:QueryMetrics` for reads, scoped to the workspace ARN. There is no per-metric or per-label authorization, so isolating a tenant means a separate workspace.
 
-You don’t have to guess. Prometheus tracks it all — with millisecond-level resolution and zero fluff.
+- **Cross-account ingestion uses role assumption**, with the collector assuming a role in the workspace account. A shared credential answer is wrong.
 
----
+- **The KMS key is set at workspace creation and cannot be changed.** Same pattern as the FinSpace environment key and RDS at-rest encryption. Rotating to a different CMK means a new workspace.
 
-## How It Works
+- **VPC endpoint plus endpoint policy** is the answer for keeping ingestion and query traffic off the public internet, and an `aws:SourceVpce` condition is what actually denies access from elsewhere.
 
-Prometheus uses a **pull-based model** to scrape metrics from **exporters** — processes or sidecars that expose telemetry in a standardized format.
+- **Exposed exporter endpoints are a real exposure.** `/metrics` on `node_exporter` or `kube-state-metrics` reveals host inventory, container images, resource limits, and cluster topology. Remediation is network policy and security groups restricting the scrape path to the collector, not authentication on the exporter, which most exporters do not support.
 
-### Key Components
+- **Alert routing is through SNS.** Anything requiring an alert to trigger automated remediation goes SNS to Lambda or SNS to EventBridge, and the SNS topic policy plus KMS encryption on the topic is part of the answer.
 
-| Component         | Description                                                        |
-|------------------|--------------------------------------------------------------------|
-| Prometheus server| Core engine that scrapes, stores, and queries metrics              |
-| Exporter         | Component that exposes `/metrics` endpoint (e.g., `node_exporter`) |
-| Time-series DB   | Internal TSDB that stores metrics in block format                  |
-| PromQL           | Query language for slicing, filtering, aggregating metrics         |
-| Alertmanager     | Routes alerts to Slack, PagerDuty, email, etc.                     |
-| Scrape configs   | Define which targets to pull from, at what interval                |
+- **Metrics for detection, logs for evidence.** Prometheus answers "is this workload behaving abnormally right now." It does not answer "who did this," which requires CloudTrail, and it does not retain the record long enough for most forensic requirements.
 
-### Popular Exporters
+## Limitations
 
-| Exporter           | Purpose                                             |
-|--------------------|-----------------------------------------------------|
-| node_exporter      | Linux system metrics: CPU, disk, memory             |
-| kube-state-metrics | Kubernetes objects: pods, deployments, statefulsets|
-| cadvisor           | Container-level metrics                             |
-| blackbox_exporter  | Synthetic monitoring (ping, HTTP probes, etc.)      |
-| cloudwatch_exporter| Pull metrics from CloudWatch into Prometheus        |
-| custom app metrics | Instrumented via SDKs (Go, Python, Java, etc.)      |
+- Retention is fixed at 150 days with no configuration and no cold tier. Anything needing longer requires exporting to S3 through a separate pipeline.
 
----
+- No query-level audit. You cannot determine which principal ran which PromQL query against which workspace, so a workspace containing sensitive operational data has weaker attribution than a logging service would.
 
-## Security and Compliance Relevance
+- Authorization granularity stops at the workspace. There is no label-based or metric-based access control, so any principal with `aps:QueryMetrics` sees every series in that workspace.
 
-Prometheus is incredibly powerful — but it’s also deeply technical and **security-sensitive**. Here’s how Snowy’s team thinks about it in production:
+- Metrics are aggregate and dimensional by design. High-cardinality labels such as user ID, request ID, or source IP are an anti-pattern that degrades performance and cost, which limits how far metrics can substitute for logs in an investigation.
 
-### Prometheus in Security Workflows
+- Managed Prometheus does not scrape. A collector still has to be deployed, secured, and monitored, and if the collector fails there is no data, with the gap visible only if you alert on the absence of samples.
 
-| Use Case                   | Relevance                                                                 |
-|----------------------------|---------------------------------------------------------------------------|
-| Runtime anomaly detection  | Alert on pods with excessive restarts, OOM kills, or CPU saturation       |
-| Monitoring critical daemons| Alert if kubelet, containerd, or iptables restart                         |
-| Detecting priv escalation  | Alert on containers consuming unexpected system resources                 |
-| Infrastructure abuse       | Spot bitcoin miners via GPU or CPU spike patterns                         |
+- The KMS key is immutable per workspace, and workspace-level quotas on active series and ingestion rate become hard operational limits during an incident when metric volume spikes.
 
-| Cold-start detection       | Time-to-readiness metrics on Lambda or Fargate containers                 |
-| Pod identity leakage       | Track service-to-service call volume to detect lateral movement attempts  |
+- Alertmanager configuration is uploaded as a definition rather than managed through a console workflow, and a malformed definition can silence alerting without an obvious failure signal.
 
-### Security Risks & Mitigations
-
-
-| Risk                        | Mitigation                                                                 |
-|-----------------------------|----------------------------------------------------------------------------|
-| Exposed `/metrics` endpoints| Require mTLS or IP-based firewalling; never expose directly to public      |
-
-| No built-in auth or encryption| Run behind NGINX or Ingress controller with OIDC or IAM                 |
-| Storage unencrypted by default| Use encrypted disks or store via remote write (e.g., Cortex, Thanos)    |
-| No native RBAC              | Use external tools (Grafana roles) to limit access                        |
-
-| Alert spam or DOS           | Implement deduplication and rate limiting in Alertmanager                 |
-
-Prometheus needs **guardrails in security environments** — but when hardened, it becomes an invaluable source of truth.
-
----
-
-## Pricing Model
-
-Prometheus itself is **open-source and free** — but your costs come from associated infrastructure:
-
-| Component              | Cost Driver                                           |
-|------------------------|--------------------------------------------------------|
-| Self-hosted Prometheus | EC2/EKS node cost + storage (EBS/Gp3)                  |
-| Remote write targets   | If using Thanos/Cortex: S3, EFS, etc.                  |
-| Managed Prometheus (AMP)| $0.90 per 10M samples ingested per month             |
-| Alertmanager           | Free, self-hosted — or part of Grafana Cloud stack     |
-
-**If you're on Amazon Managed Prometheus**, it integrates with:
-
-- Amazon Managed Grafana (AMG)  
-- CloudWatch  
-- IAM and VPC security groups  
-
-…and it’s **production-ready** with FIPS 140-2 encryption, IAM auth, and audit integration.
-
----
-
-## Real-Life Example — *Snowy’s Container Threat Monitor*
-
-Snowy’s team runs **multi-tenant workloads on EKS** for internal devs and customers. They needed visibility into:
-
-
-- Abnormal CPU or memory usage  
-- Restart spikes that might signal container escapes or failed updates  
-
-- Network egress to unknown regions  
-- System-level daemon restarts  
-
-
-They deployed:
-
-- `node_exporter` + `kube-state-metrics` in each cluster  
-- Prometheus scraping on 15s intervals  
-
-- Alertmanager tied to their on-call Slack channel  
-
-**Custom alerts included:**
-
-- sum(rate(container_cpu_usage_seconds_total[1m])) by (pod) > 1.0
-- container_restart_count > 3 in 5 minutes
-- if network_bytes_sent > 2GB to unknown / unapproved IP ranges
-- kube_node_status_condition{condition="Ready",status="false"}
-
-**Grafana dashboards correlated:**
-
-- Prometheus metrics  
-- VPC Flow Logs (via CloudWatch + Loki)  
-- Inspector findings (via Athena queries)  
-
-This stack gave them a **real-time, programmable SOC view** of the cluster — with zero third-party agents or SaaS vendor lock-in.
-
----
-
-## Final Thoughts
-
-Prometheus is the **heartbeat monitor of your cloud-native systems**. It’s fast, extensible, battle-tested, and deeply programmable.
-
-For Snowy's environment — especially across EKS, ECS, EC2, and hybrid clusters — Prometheus adds:
-
-- Fine-grained, real-time visibility  
-- Fully custom metric-based alerting  
-- Self-hosted sovereignty over telemetry  
-- Integration with open observability tools like Grafana, Loki, Thanos, and Alertmanager  
-
-If you're serious about **observability, incident detection, or runtime behavior monitoring** — Prometheus is not optional. It’s **foundational**.
-
+- Exporters run with meaningful host or cluster visibility. `node_exporter` typically needs host filesystem and process access, and cAdvisor needs container runtime access, so the collection layer itself is privileged software that expands the attack surface it was deployed to observe.

@@ -1,154 +1,77 @@
 # AWS Cloud9
 
-## What Is the Service
+AWS Cloud9 is a browser-based IDE with an integrated terminal, backed either by an EC2 instance Cloud9 provisions in your account or by an existing server you connect to over SSH. Its security relevance has two sides. As a development tool it removes local credential sprawl: nobody stores access keys on a laptop, the environment can be placed in a private subnet reachable only through Systems Manager, and the whole workspace can be destroyed when a contractor leaves. As a piece of infrastructure it is a persistent EC2 instance with an attached EBS volume, an instance profile, a browser-accessible root shell, and the ability to receive forwarded user credentials, which makes it one of the more powerful footholds in an account and a favored persistence mechanism for an attacker who obtains developer permissions. Its credential model is unusual and worth understanding on its own: AWS managed temporary credentials inject the calling user's own permissions into the terminal, minus a fixed deny list, rather than using the instance profile. The most important operational fact is that AWS closed Cloud9 to new customers, so it now appears mainly in existing estates and in exam questions rather than in new designs. The thing to hold onto is that a Cloud9 environment is a long-lived EC2 instance with a shell, so its security posture is EC2's posture plus a credential injection mechanism unique to the service.
 
-**AWS Cloud9** is a **cloud-based Integrated Development Environment (IDE)** that runs entirely in the browser. It gives you a full-featured code editor, terminal, and debugger — all hosted on an EC2 instance (or a connected environment like a Docker container or SSH host).
+## How it works
 
-But this isn't just a coding sandbox. In Snowy's world, **Cloud9 becomes a security-hardened jumpbox**, a **dev tooling launchpad**, and a **team collaboration environment** with direct AWS SDK access.
+- **Environment types.** An EC2 environment provisions and manages an instance in your account. An SSH environment connects to a server you already run, on-premises or elsewhere, with Cloud9 acting only as the editor. The security surface differs completely between the two.
 
-> No setup, no dependency hell — just log in and start coding, scripting, deploying, or debugging directly in your VPC.
+- **No-ingress EC2 environments.** The recommended configuration connects through Systems Manager Session Manager rather than inbound SSH. The instance sits in a private subnet with no inbound rules and no public IP, and the instance profile carries `AWSCloud9SSMInstanceProfile`. This removes port 22 exposure entirely.
 
----
+- **AWS managed temporary credentials.** By default Cloud9 injects credentials derived from the console user's own identity into the terminal, refreshed automatically. They carry the user's permissions minus a published deny list that blocks a set of IAM and organization-altering actions. Disabling AMTC makes the terminal fall back to the instance profile, which is the correct choice when the environment should have a fixed, scoped identity rather than the interactive user's full permissions.
 
-## Key Features
+- **Instance profile.** The EC2 instance carries a role separate from the injected user credentials. With AMTC on, the instance profile is mostly for SSM connectivity. With AMTC off, the instance profile becomes the environment's only identity, and scoping it is the primary control.
 
-- Browser-based IDE (code editor + terminal + debugger)  
-- Pre-installed AWS CLI, SDKs, and SAM CLI  
-- Shared environments for pair programming or teaching  
-- Can run in your VPC (no internet exposure)  
-- IAM-integrated: follows the permissions of the logged-in user  
-- You can attach EBS, use VPC endpoints, apply Security Groups  
+- **Environment sharing.** Environments can be shared with other IAM principals as read-only or read-write members. A read-write member gets a shell on the instance, which means sharing an environment is functionally granting shell access with whatever credentials that environment holds.
 
----
+- **Persistent storage.** An EBS volume holds the workspace and survives stop and start. Whatever a developer clones, downloads, or writes persists there, including repository contents and any credentials saved to disk.
 
-## Cybersecurity Analogy
+- **Auto-stop.** Environments stop after a configurable idle period, which limits cost and reduces the window in which a running instance is reachable, but the volume and its contents persist.
 
-Imagine a **remote jumpbox** that:
+- **Network placement.** The instance lives in a VPC and subnet you choose with a security group you control. Private subnets with VPC endpoints for the AWS APIs the environment needs is the hardened configuration, with no NAT gateway if internet package installation is not required.
 
-- Requires no inbound SSH  
-- Logs all activity (via CloudTrail)  
-- Follows IAM least privilege  
-- Runs in a sandboxed EC2  
-- Lets you write and deploy IaC or Lambda code securely  
-- Gives junior engineers a safe playground with guardrails  
+- **IAM controls.** `cloud9:CreateEnvironmentEC2`, `cloud9:CreateEnvironmentMembership`, and `cloud9:UpdateEnvironment` are the meaningful actions. Restricting environment creation, and especially membership creation, is what prevents a shell from being handed to another principal. `cloud9:EnvironmentUserArn` and tag conditions allow scoping.
 
-That’s **Cloud9** — a governable, observable, permission-bound **DevOps terminal in the cloud**.
+- **Logging.** CloudTrail records Cloud9 control plane operations including environment creation, membership changes, and deletion, and records every AWS API call made from the terminal under the user's identity when AMTC is in use. It does not record shell commands. Session Manager logging can capture the session when connecting through SSM, which is the only path to command-level audit.
 
-## Real-World Analogy
+## Cloud9 versus adjacent development and access environments
 
-**Blizzard** is working on Lambda code to process malware signatures uploaded to S3. He’s traveling and doesn’t want to install Python, pipenv, or AWS SAM CLI on his laptop. Instead:
+| Option | Underlying compute | Identity in the terminal | Command-level audit | Persistence | Inbound network requirement | Current availability |
+|---|---|---|---|---|---|---|
+| AWS Cloud9 | EC2 in your account, or your own SSH host | Injected user credentials, or the instance profile | No, unless via Session Manager logging | EBS volume persists | None with no-ingress SSM | Closed to new customers |
+| AWS CloudShell | AWS-managed environment or your VPC | Console session credentials | No | 1 GB home directory per Region | None | Available |
+| EC2 with Session Manager | Your instance | Instance profile | Yes, full session logging | Instance storage | None | Available |
+| Bastion host with SSH | Your instance | Whatever is configured | Only if you build it | Instance storage | Port 22 from somewhere | Available |
+| SageMaker Studio | Managed instances, VPC-attached | Execution role | No | EFS-backed workspace | None | Available |
+| Local IDE with IAM Identity Center | Developer's machine | Short-lived SSO credentials | No | Local disk | None | Available |
+| CI/CD build environment | Managed build container | Build role | Pipeline logs the commands | Ephemeral | None | Available |
 
-- He opens Cloud9 in `us-west-2`  
-- Spins up a small EC2-based IDE with SAM CLI pre-installed  
-- Clones Snowy's GitHub repo  
-- Tests functions using real CloudWatch logs  
-- Deploys to Lambda with `sam deploy --guided`  
-- No SSH, no local config, no Git secrets exposed  
+## What gets tested
 
----
+- **No-ingress EC2 environments through Session Manager** are the answer for removing inbound SSH from a development environment, and they pair with a private subnet and VPC endpoints.
 
-## How It Works
+- **AWS managed temporary credentials carry the user's permissions.** If the requirement is that an environment operate with a fixed, narrow identity regardless of who opens it, the answer is disabling AMTC and scoping the instance profile.
 
-| Component         | Description                                        |
-|-------------------|----------------------------------------------------|
-| Environment       | A container for an EC2 instance + IDE + runtime    |
-| Instance Type     | You choose t2.micro, t3.medium, etc.               |
-| Shared Environments | Invite team members to collaborate in real time  |
-| Persistent Storage| Backed by EBS — data survives reboots              |
-| IAM-Based Access  | Users only access environments allowed by their roles |
-| No SSH Needed     | Console-based login via AWS Console or federated SSO |
-| Built-In Tools    | AWS CLI, Python, Node.js, SAM, Docker (some AMIs), Git |
+- **Sharing an environment is granting shell access.** A read-write member can run commands with the environment's credentials, so `cloud9:CreateEnvironmentMembership` is the permission to restrict when the concern is lateral credential access.
 
----
+- **Cloud9 is a persistence mechanism.** An attacker with developer permissions who creates an environment gets a long-lived instance with a shell and credentials in an account, and it looks like ordinary developer activity. Alerting on `CreateEnvironmentEC2` and on membership changes is the detection.
 
-## Deployment Options
+- **CloudShell versus Cloud9.** CloudShell is ephemeral, has no instance in your account, and is available for ad hoc CLI work. Cloud9 is a persistent instance with an IDE and is the answer only when a real development workspace with files and a debugger is required.
 
-| SSH-Connected    | You connect to your own server (on-prem or EC2) via SSH |
-| Docker-Based     | Attach to local Docker for sandboxed dev environments   |
+- **CloudTrail sees the API calls, not the commands.** Command-level audit requires connecting through Session Manager with session logging enabled to S3 or CloudWatch Logs.
 
----
+- **The EBS volume retains everything.** Offboarding a contractor means deleting the environment, not just revoking their IAM access, since the volume holds repository contents and anything else written to disk.
 
-## Security & Compliance Relevance
+- **Cloud9 is closed to new customers**, so a current-architecture question should be answered with CloudShell, Session Manager, a managed build environment, or a local IDE with IAM Identity Center rather than Cloud9.
 
-Cloud9 is a **low-trust entry point** into your cloud — so **securing it is critical**.
+- **SSH environments put Cloud9 outside your account boundary.** The editor connects to a host you manage, so AWS-side controls apply to almost none of it.
 
-| Control             | Security Benefit                                         |
-|---------------------|----------------------------------------------------------|
+## Limitations
 
-| IAM Permissions     | You can restrict who can create/use environments         |
-| VPC Only Mode       | No public IP, no internet exposure, use VPC endpoints    |
-| CloudTrail          | All Cloud9 activity is logged                            |
+- Closed to new customers. Existing environments continue to work, but this is not a service to design new architecture around, and its feature development has effectively stopped.
 
-| Audit Access        | Use IAM condition keys to limit access by tag, region, etc. |
+- It is a persistent EC2 instance with all of that instance's attack surface: OS patching, package vulnerabilities, instance metadata, an EBS volume, and a shell that runs as a user who can escalate to root.
 
-| Least Privilege     | Users assume their role inside Cloud9 terminal           |
-| No SSH Ports Open   | Secure by design — all access via browser                |
+- AWS managed temporary credentials give the terminal the interactive user's permissions, so a developer with broad permissions gets a broadly permissioned shell, and the deny list blocks only a narrow set of actions.
 
-You can also lock down Cloud9 via:
+- No native command-level logging. Without Session Manager session logging, there is no record of what was executed, only of the resulting API calls.
 
-- **Service Control Policies (SCPs)** for org-wide restrictions  
-- **Session Manager**, if needed, to enforce shell behavior  
+- The EBS volume is durable storage holding whatever the developer put there, with no lifecycle policy, no content visibility, and no encryption key distinction from any other volume unless you configure one.
 
----
+- Auto-stop reduces cost but not exposure. The volume, the environment, and its membership persist while stopped, and starting it is a single click.
 
-## Pricing Model
+- Shared environments have no per-member scoping beyond read-only and read-write, so there is no way to give someone the editor without giving them the terminal.
 
-You pay for the **underlying EC2 instance + EBS volume** — there is **no additional charge** for Cloud9 itself.
+- Instance-level hardening such as IMDSv2 enforcement, agent installation, and patching is not handled by Cloud9 and must be applied to the instance the same way it would be for any EC2 workload.
 
-| Resource               | Pricing                    |
-|------------------------|----------------------------|
-
-| EC2 Instance (e.g., t3.small) | ~$0.023/hr             |
-| EBS Storage            | $0.10 per GB/month          |
-| Stopped Environment    | Only EBS billed             |
-| Cloud9 Usage Itself    | Free                        |
-
-> **Tip:** Enable **auto-stop** (e.g., after 30 minutes idle) to save money.
-
----
-
-## Real-Life Use Cases (Snowy Team)
-
-### Secure Dev Box for Temp Engineers
-
-New contractors join the Snowy threat hunting team. Instead of provisioning laptops:
-
-- Give them IAM roles  
-- Let them open Cloud9 environments in VPC  
-- No local keys, nothing to install  
-- All activity logged  
-
-### Ephemeral PenTest Toolkit
-
-**Frost** is running a red team test against misconfigured IAM roles:
-
-- Spins up Cloud9 in its own isolated subnet  
-- Installs `pacu`, `enumerate-iam`, or custom scripts  
-- Runs CloudTrail-based privilege escalation tests  
-
-### Lightweight Automation Hub
-
-Snowy uses Cloud9 to:
-
-- Write Lambda functions  
-- Author SSM automation documents  
-- Test CLI commands using short-lived creds  
-
-No dev laptop needed.
-
----
-
-## Final Thoughts
-
-**Cloud9 isn’t just a dev IDE** — it’s a **secure, ephemeral command post** for building, testing, and debugging AWS workloads without ever touching a local machine.
-
-In the Snowy world:
-
-- It’s a **DevSecOps classroom**  
-- A **secure IAM-bound jumpbox**  
-- A **quick IaC testing lab**  
-- A **safe place for Lambda dev**  
-- A **zero-footprint emergency terminal**  
-
-> It’s the fastest way to go from **browser → deployed → secure** — especially when your environment needs to stay clean, observable, and role-bound.
-
+- SSH environments shift nearly all responsibility outside AWS, so the security benefits of the managed model do not apply to them at all.

@@ -1,133 +1,74 @@
 # AWS Glue DataBrew
 
-## What Is The Service
+AWS Glue DataBrew is a visual data preparation service that applies a versioned sequence of transformations to a dataset without writing Spark code. You point a project at data in S3, the Glue Data Catalog, Redshift, or a JDBC source, sample it, build a recipe in the UI, and run a serverless job that applies the recipe to the full dataset and writes output to S3. Its security relevance is that it is a governed redaction and normalization stage: it sits between raw ingestion and anything downstream that should not see raw sensitive values. Recipes support hashing, masking, replacement, and cryptographic operations on specific columns, and because a recipe is a named, versioned artifact rather than ad hoc code, the transformation applied to a dataset is itself auditable evidence. The counterweight is that DataBrew is a service that reads your most sensitive raw data by design, so the IAM role it assumes, the KMS keys it can use, and the output location it writes to are the three things that matter. The thing to hold onto is that DataBrew is a versioned transformation layer whose security value comes from the recipe being reviewable and reproducible, and whose security risk is concentrated in the service role that reads the pre-redaction data.
 
-AWS Glue DataBrew is a visual, no-code data transformation tool that lets you clean, normalize, and enrich datasets without writing a single line of code. It’s part of the AWS Glue family, but it’s designed for analysts, engineers, and security teams who need to quickly manipulate data without building full-blown Spark jobs.
+## How it works
 
-You can use DataBrew to:
-- Clean up semi-structured logs from S3  
-- Standardize formats (timestamps, IPs, emails, etc.)  
-- Mask or redact PII before storage  
-- Drop unneeded or sensitive columns  
-- Normalize messy, inconsistent data before feeding into Athena, Macie, or GuardDuty  
+- **Datasets.** A dataset is a pointer to source data plus format metadata. Supported sources include S3, Glue Data Catalog tables, Redshift, RDS through the catalog, and Data Exchange datasets. The data is not copied into DataBrew at registration, the service reads it when a project or job runs.
 
-In security workflows, it often sits between ingestion and detection, acting as a sanitizer for data that is too chaotic or risky to analyze raw. Whether you’re prepping logs for SIEM queries or transforming customer data for a redacted data lake, DataBrew gives you powerful transformations in a GUI-based, serverless form.
+- **Projects and sampling.** A project loads a sample, by default 500 rows, into an interactive session for recipe authoring. That sample is real production data rendered in a console, which makes console access to a project an effective read grant on sensitive columns even before any job runs.
 
----
+- **Recipes.** An ordered, versioned list of transformation steps. Recipes are publishable, so a specific version can be pinned to a job, and the version history is the record of what transformation was applied when. Recipes can be exported as JSON and managed in source control alongside infrastructure code.
 
-## Cybersecurity Analogy
+- **Jobs.** Two types. A recipe job applies a published recipe to the full dataset and writes output. A profile job analyzes the dataset and produces a data quality profile including null counts, distinct values, distributions, and correlations, written to S3 as JSON.
 
-Think of DataBrew like a pre-ingestion firewall for your data lake. It doesn’t stop the packets from arriving, but it ensures that what gets saved is clean, normalized, and compliant.
+- **PII detection in profile jobs.** Profile jobs can be configured to detect personally identifiable information, flagging columns that appear to contain identifiers such as email addresses, phone numbers, government IDs, or credit card numbers. That output is the input to deciding which columns need masking, and it overlaps with what Macie does at the object level.
 
-Imagine you're feeding messy logs into your SIEM. If they’re malformed, inconsistent, or contain sensitive data, your detection engines either break or cause alerts you can’t trust. DataBrew steps in and says:
+- **Redaction and obfuscation transforms.** The security-relevant transform families are masking (replace characters with a mask symbol, optionally preserving a prefix or suffix), hashing (one-way, non-reversible), replacement with a fixed or random value, deterministic encryption and decryption using a KMS key so the same input maps to the same ciphertext and can be reversed by an authorized job, and column deletion. Deterministic encryption is the one that preserves joinability without preserving readability.
 
-> “Let me clean this up first. I’ll redact those IPs, standardize those timestamps, drop anything toxic, and make it all queryable.”
+- **Data lineage.** DataBrew tracks the path from source dataset through recipe versions to output, which is the artifact you produce when asked how a redacted dataset was derived.
 
-It’s the data-prep equivalent of a proxy scrubber that enforces structure and privacy before passing traffic along to deeper security analysis tools.
+- **IAM and the service role.** DataBrew assumes a role you create to read sources, write outputs, and use KMS keys. That role is the highest-privilege element in the design because it reads pre-redaction data. `databrew:*` actions govern who can create datasets, open projects, publish recipes, and start jobs, and opening a project is the action that exposes sample data.
 
-## Real-World Analogy
+- **Encryption.** Job output is encrypted with SSE-S3 or SSE-KMS at the output location. Jobs can be configured with a KMS key for the data DataBrew handles, and the service role needs corresponding key policy grants. Deterministic encryption transforms require an explicitly specified KMS key.
 
-Picture a food prep station in a professional kitchen. You don’t throw whole, unwashed vegetables onto a customer’s plate. Someone:
-- Cleans them  
-- Peels them  
-- Chops them into consistent sizes  
-- Discards bruised parts  
-- Puts them into clean containers  
+- **Network.** Recipe jobs can be run inside a VPC by attaching a Glue connection with subnet and security group configuration, which is required when the source is a private RDS or Redshift instance and is how you keep job traffic off the public network.
 
-That’s DataBrew. It’s not the storage fridge (S3), it’s not the customer-facing dashboard (Athena or QuickSight), and it’s not the chef writing Spark jobs (Glue ETL). It’s the cleaning and prep station, ensuring that what goes downstream is safe, clean, and ready for consumption — by humans or machines.
+- **Scheduling and logging.** Jobs run on demand, on a cron schedule, or triggered externally through EventBridge or Step Functions. CloudTrail records dataset, project, recipe, and job API calls. Job run logs go to CloudWatch Logs, and job history records which recipe version was applied to which dataset.
 
----
+## DataBrew versus adjacent data preparation and protection services
 
-## How It Works
+| Service | Interface | Redaction and masking capability | Where the transformation is recorded | Detects sensitive data | Best fit |
+|---|---|---|---|---|---|
+| Glue DataBrew | Visual, no code | Mask, hash, replace, deterministic KMS encryption, drop column | Versioned recipe plus job history | Yes, in profile jobs | Analyst-driven redaction and normalization with an auditable artifact |
+| Glue ETL | PySpark or Scala | Anything you code, plus Glue sensitive data detection transform | Job script in source control | Yes, detection transform | Engineered pipelines and complex logic |
+| Amazon Macie | Managed scanning | None, discovery only | Findings, not transformations | Yes, that is its purpose | Knowing where sensitive data is in S3 |
+| Lake Formation | Policy engine | Column, row, and cell filtering at query time | Permission grants | No | Restricting what a querying principal sees without changing the data |
+| Comprehend PII | API and Lambda | Redaction of PII in unstructured text | Whatever calls it | Yes, in free text | Documents and text bodies rather than tabular columns |
+| Kinesis Firehose with Lambda | Code in a transform function | Anything you code, applied in stream | Function version | No | Redaction in the ingestion stream before landing |
 
-The core building block of DataBrew is a **project** — this is where you connect to a dataset (usually in S3), sample some records, and start applying transformations using a drag-and-drop UI. Each transformation becomes a step in a **recipe** — a version-controlled, auditable set of actions.
+## What gets tested
 
-You can preview your transformations in real time, explore the data with visual profiling, and run DataBrew jobs that apply the full recipe to all your data.
+- **Hashing versus deterministic encryption versus masking.** Hashing is irreversible and joinable. Deterministic encryption is reversible by a principal with the KMS key and joinable. Masking is irreversible, not joinable, and preserves format for display. Pick by whether the value must be recoverable and whether records must still be linked.
 
-### Key Components:
+- **Redaction before analysis versus restriction at query time.** DataBrew produces a physically redacted copy, which is the answer when the data will be shared, exported, or handed to a third party. Lake Formation filters at query time and leaves the data intact, which is the answer when different principals need different views of the same table.
 
-| Component | Description |
-|----------|-------------|
-| Dataset  | Source data (S3, Glue Catalog, Redshift, etc.) |
-| Project  | Visual workspace for sampling and editing data |
-| Recipe   | A versioned list of all transformation steps |
-| Job      | A scalable, serverless job that applies the recipe to the full dataset |
-| Profile  | Summary of data quality (nulls, formats, outliers, etc.) |
+- **The service role reads unredacted data.** Expect hardening questions answered by scoping the role to specific source prefixes, adding `aws:SourceAccount` and `aws:SourceArn` conditions on the trust policy, and separating the role that reads raw input from any role with access to the redacted output bucket.
 
-You can then store the cleaned output back into S3 in formats like CSV, JSON, or Parquet — and optionally register it into Glue Data Catalog for querying via Athena.
+- **Opening a project displays live sample data.** Restricting `databrew:CreateProject` and `databrew:DescribeProject` is a data access control, not just a management control. A common design puts recipe authoring on a de-identified sample and job execution on production data under a separate role.
 
----
+- **Profile job PII detection versus Macie.** Profile jobs flag sensitive columns in a specific dataset you are already preparing. Macie discovers sensitive data across buckets you have not curated. If the question is about finding unknown exposure, the answer is Macie.
 
-## What It Transforms
+- **Private source connectivity is a Glue connection with VPC configuration**, not a public endpoint or a NAT-only answer. The job runs in your subnets with your security groups.
 
-DataBrew supports over **250 built-in transformations**, such as:
+- **Recipe versions are the audit artifact.** When a question asks how to prove which transformation was applied to a released dataset, the answer is the published recipe version pinned to the job run, plus CloudTrail and job history.
 
-- Remove/rename/drop columns  
-- Mask values (e.g., hash or redact emails, IPs, names)  
-- Change data types (e.g., string to date)  
-- Format standardization (e.g., normalize ISO8601 timestamps)  
-- Filter rows (e.g., remove nulls or internal IPs)  
-- Extract substrings, split columns, merge values  
-- Conditional transformations (e.g., “If column X equals Y, then…”)  
-- Add calculated fields (e.g., time deltas, bucket tags, regex matches)  
+- **KMS key policy grants to the DataBrew service role** are required for both encrypted sources and deterministic encryption transforms. A job failing on encrypted input is a key policy problem, not a bucket policy problem.
 
-### For Security Teams, the Most Powerful Use Cases Include:
-- Redacting sensitive data before it hits Macie or third-party analyzers  
-- Cleaning firewall, VPC Flow, and custom app logs before ingestion into SIEM  
-- Prepping incident response data for Athena analysis  
-- Adding compliance metadata like job ID, region, or transformation time  
+## Limitations
 
----
+- No code, which is also the ceiling. Anything requiring conditional logic across rows, custom parsing, or an external lookup exceeds the recipe model and belongs in Glue ETL or a Lambda transform.
 
-## Pricing Model
+- Interactive sessions are billed per minute and jobs per node-hour, so an analyst leaving a project open is a live cost and a live exposure of sample data.
 
-DataBrew has two pricing dimensions:
+- Sampling is a correctness risk. A recipe built on 500 rows may not handle formats, nulls, or edge cases present in the full dataset, and a masking rule that misses a variant silently passes raw values through.
 
-| Category           | Billing Unit                  |
-|-------------------|-------------------------------|
-| Interactive session | Charged per minute of usage   |
-| Job run            | Charged per node-hour (serverless job) |
+- PII detection in profile jobs is heuristic. It will miss custom identifiers, internal account numbers, and free-text fields containing identifiers, so it is a starting point rather than a compliance guarantee.
 
-There are no charges for creating projects or recipes, and you only pay while editing data or running jobs.  
-If you preview 10,000 rows for 15 minutes, then schedule a job to transform 10GB of logs, you pay only for the session time + job duration — **not** for dataset size or storage.
+- Output is a new copy in S3. The original unredacted data still exists and still needs its own lifecycle, access control, and deletion policy. DataBrew does not reduce the sensitivity of the source.
 
----
+- Hashing without a salt is vulnerable to precomputation on low-cardinality fields such as phone numbers or postal codes. The recipe transform alone does not make a value unrecoverable in practice.
 
-## Real-Life Example
+- Deterministic encryption preserves the ability to link records, which means it preserves re-identification risk when combined with other datasets. It is pseudonymization, not anonymization, and most privacy regimes treat it as still-personal data.
 
-Let’s say **Snowy’s Security Team** collects IAM logs from 30 accounts across multiple regions, and they all get dumped into a shared S3 bucket. These logs are:
-- In different formats  
-- Full of unnecessary fields  
-- Sometimes include unredacted email addresses  
-- Inconsistent with Macie’s expected schema  
-
-Instead of building custom Python parsers or paying a dev team, Snowy:
-- Spins up a DataBrew project  
-- Loads a sample of the IAM logs  
-- Builds a recipe to:  
-  - Drop fields like `userAgent`, `tlsDetails`  
-  - Mask `userIdentity.arn` using a hash  
-  - Normalize `eventTime` to ISO8601 UTC  
-  - Add a new column: `security_tag = "high"`  
-- Schedules a DataBrew job to run every 6 hours  
-- Outputs to an encrypted S3 location  
-- Registers the output table in Glue Catalog  
-- Queries the clean logs with Athena, with Macie scanning them automatically  
-
-Now the logs are sanitized, structured, and safe to share across accounts, tools, or regions — **with no code and full auditability**.
-
----
-
-## Final Thoughts
-
-Glue DataBrew is not a replacement for Spark jobs or Lambda ETL — but it’s a **critical security tool** when you need fast, auditable, no-code data transformation.
-
-In many environments, especially those where teams lack deep engineering support, DataBrew becomes the **bridge between raw logs and trusted analytics**.
-
-It’s perfect for:
-- Redacting sensitive data before compliance scans  
-- Normalizing logs before ingestion into SIEMs  
-- Empowering analysts to clean data without Python  
-- Building repeatable, scheduled jobs for messy multi-account datasets  
-
-In **Snowy’s world** — where multi-account chaos, hybrid log pipelines, and rapid incident response are the norm — AWS Glue DataBrew is the **polishing cloth** that gets the job done quietly, cleanly, and at scale.
+- Regional and source support is narrower than Glue ETL, and very large datasets are more economically processed with a Spark job than with a recipe job.

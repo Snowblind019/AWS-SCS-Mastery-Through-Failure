@@ -1,202 +1,78 @@
 # Amazon RDS
 
-## What Is Amazon RDS
+Amazon RDS is AWS's managed relational database service, supporting MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, and Db2, with Aurora as a separate cloud-native engine sharing much of the same control plane. AWS operates the host, the OS, and the engine patching; you own everything above and around it, which under the shared responsibility model means network placement, encryption key selection, credential management, parameter configuration, and audit logging are all yours. That split is where the exam lives and where real breaches come from, because RDS ships with several defaults that are convenient rather than secure: an instance can be made publicly accessible with a checkbox, TLS is available but not required until you force it in a parameter group, and encryption at rest is a creation-time decision that cannot be reversed. The instance itself is a real host with an ENI in your subnet, so unlike DynamoDB or S3 it has a network attack surface governed by security groups. The thing to hold onto is that RDS security decomposes into four independent layers, network reachability, at-rest encryption chosen once at creation, credential mechanism, and audit configuration, and each is enforced by a different control that must be set deliberately.
 
-Amazon RDS is AWS’s managed relational database service that takes care of provisioning, patching, backups, failover, and replication of popular SQL databases like:
+## How it works
 
-- MySQL  
-- PostgreSQL  
-- MariaDB  
-- Oracle  
-- SQL Server  
-- Amazon Aurora (AWS-native engine)  
+- **Instance and subnet placement.** An instance lives in a DB subnet group spanning at least two AZs. Its ENIs sit in those subnets, so the security group on the instance is the primary reachability control. The `PubliclyAccessible` flag determines whether the endpoint resolves to a public IP; combined with a route to an internet gateway and a permissive security group, that is the classic exposure path.
 
-RDS simplifies the operational overhead of running relational databases, while providing built-in security, scaling, monitoring, and high availability.
+- **Encryption at rest.** Selected at instance creation with an AWS managed key or a customer managed KMS key. Covers the underlying storage, automated backups, snapshots, read replicas, and logs. It cannot be enabled, disabled, or re-keyed in place. The only path is snapshot, copy the snapshot specifying the target key, restore from the copy. Oracle and SQL Server additionally support engine-native TDE through an option group, which is a separate mechanism from RDS storage encryption.
 
-For security teams and architects, RDS matters because:
+- **Encryption in transit.** TLS is available on every engine but optional by default. Enforcement is a parameter group setting: `rds.force_ssl` for PostgreSQL, `require_secure_transport` for MySQL and MariaDB, an option group setting for Oracle and SQL Server. Clients validate against the regional or global RDS CA bundle, and CA rotation is a recurring operational event that breaks clients pinning an expired bundle.
 
-- It's a critical data layer that often contains PII, financial records, or sensitive business data  
-- It must be hardened, encrypted, monitored, and isolated  
-- Misconfiguration can lead to data breaches, SQL injection, or open exposure  
+- **IAM database authentication.** Supported on MySQL, MariaDB, and PostgreSQL, not on Oracle, SQL Server, or Db2. A client calls `generate-db-auth-token` and presents the token as the password. Tokens expire in 15 minutes, authorization is the `rds-db:connect` action on a `dbuser` ARN, and no static password exists. Throughput is limited to roughly 200 new connections per second, so it fits administrative and serverless access rather than a high-churn connection pool.
 
-It’s not just about launching a DB — it’s about building a secure, resilient, auditable system.
+- **Secrets Manager integration.** Master credentials can be managed directly by RDS with fully managed rotation, or stored as a secret with a rotation Lambda. The secret's resource policy and its KMS key policy are the access controls, and every retrieval is a CloudTrail event.
 
----
+- **Kerberos and directory authentication.** RDS integrates with AWS Managed Microsoft AD for Kerberos authentication on PostgreSQL, MySQL, Oracle, SQL Server, and Db2, which is the answer when the requirement is domain-joined authentication rather than IAM.
 
-## Cybersecurity Analogy
+- **RDS Proxy.** A managed connection pooler placed between the application and the instance. It retrieves credentials from Secrets Manager, can require IAM authentication, terminates TLS, and preserves connections across failover. It is the standard remedy for Lambda connection exhaustion combined with credential hygiene.
 
-Think of your RDS instance as a vault. You don’t just care about the locks (authentication), but also:
+- **High availability.** Multi-AZ instance deployment replicates synchronously to a standby in another AZ with automatic failover in one to two minutes. Multi-AZ DB cluster deployment adds two readable standbys and cuts failover to under 35 seconds. Read replicas are asynchronous, can be cross-Region, and are promoted manually, making them a DR mechanism rather than an availability one.
 
-- Where the vault is located (network isolation)  
-- Who has the keys (IAM + DB credentials)  
-- Whether the vault can alert you if tampered with (CloudWatch + audit logs)  
-- And if the vault is copied elsewhere without you knowing (snapshots, data export)  
+- **Backups and snapshots.** Automated backups within a retention window of 0 to 35 days enable point-in-time recovery. Manual snapshots persist until deleted. Both inherit the instance's encryption. Snapshots can be shared with specific accounts or made public, and cross-Region copy requires a key in the destination Region. AWS Backup adds vault-level policy and Vault Lock for immutable retention.
 
-Database security is a layered defense model, and RDS provides many tools — but it’s up to you to assemble them correctly.
+- **Logging.** Engine logs including error, general, slow query, and audit logs can be published to CloudWatch Logs. Database Activity Streams provide near real-time, KMS-encrypted, engine-level activity to Kinesis for Oracle, SQL Server, and Aurora, with synchronous mode blocking database activity if the stream cannot be written. CloudTrail records only control plane API calls such as `ModifyDBInstance` and `CreateDBSnapshot`, never SQL.
 
-## Real-World Analogy
+- **Patching and maintenance.** AWS applies OS and engine patches within a maintenance window you define. Blue/Green Deployments create a synchronized staging environment for testing an engine or schema upgrade and switching over with minimal downtime.
 
-Let’s say **Blizzard** builds a backend for a global game. Millions of users' accounts, transactions, and play data are stored in RDS PostgreSQL.
+## RDS versus adjacent database options
 
-Without proper controls, a developer could:
+| Option | Operational surface | At-rest encryption | Identity-based auth | Query-level audit | Failover behavior |
+|---|---|---|---|---|---|
+| RDS (MySQL, PostgreSQL, MariaDB) | Managed instance in your VPC | KMS, creation-time, immutable | IAM DB auth plus native users and Kerberos | Engine audit logs to CloudWatch, no DAS | Multi-AZ, one to two minutes |
+| RDS (Oracle, SQL Server, Db2) | Managed instance in your VPC | KMS plus optional engine TDE | Kerberos and native, no IAM DB auth | Database Activity Streams supported | Multi-AZ, one to two minutes |
+| Aurora | Managed cluster, shared storage volume | KMS, creation-time, immutable | IAM DB auth plus native users | Database Activity Streams | Replica promotion, under 30 seconds |
+| RDS Custom | Managed with customer OS and DB access | KMS, creation-time | Native, plus whatever you configure | Whatever you configure | Limited automation |
+| Database on EC2 | You own everything | EBS encryption you configure | Whatever you configure | Whatever you configure | You build it |
+| DynamoDB | No instances, API only | Always on, key changeable in place | IAM only, no DB users | CloudTrail data events plus Streams | Managed, transparent |
 
-- Open port 5432 to the world  
-- Reuse admin credentials across apps  
-- Skip encryption and expose cleartext backups  
+## What gets tested
 
-That’s a breach waiting to happen.
+- **Encryption cannot be added to an existing unencrypted instance.** The answer is always snapshot, copy with the KMS key, restore. The same three steps apply to changing keys and to encrypting a previously unencrypted read replica.
 
-Instead, Blizzard:
+- **Encrypted snapshot sharing requires sharing the key.** A snapshot encrypted with the default `aws/rds` managed key cannot be shared with another account at all. Copy to a customer managed key, add the target account as a key user, then share. Cross-Region copy needs a key in the destination Region.
 
-- Places RDS inside a private VPC subnet  
-- Enforces IAM-based access for developers  
-- Enables encryption at rest and in transit  
-- Monitors login attempts with CloudTrail and CloudWatch  
-- Uses read replicas and multi-AZ for fault tolerance  
+- **Public snapshot sharing is a top exposure pattern.** Encrypted snapshots cannot be made public, which is itself a control. Config rules and Security Hub flag public snapshots, and the remediation is `ModifyDBSnapshotAttribute` to remove the `all` value.
 
-**Result**: a secure, scalable foundation that protects the game and its users.
+- **Forcing TLS is a parameter group change**, not a security group or IAM change, and it requires a reboot for a static parameter. Watch for the cluster parameter group versus DB parameter group distinction on Aurora.
 
----
+- **IAM DB auth is unavailable on Oracle and SQL Server.** A question specifying one of those engines plus a no-static-password requirement points to Kerberos with AWS Managed Microsoft AD, or to Secrets Manager rotation with RDS Proxy.
 
-## Security Architecture for RDS
+- **CloudTrail does not record SQL.** For who ran which query, the answer is Database Activity Streams where supported, or the engine audit log exported to CloudWatch Logs. Synchronous DAS is the answer when activity must never proceed unaudited.
 
-Here’s how you build a strong security posture around RDS:
+- **Multi-AZ versus read replica.** Multi-AZ is synchronous, same-Region, and for availability. Read replicas are asynchronous, can be cross-Region, and are for read scaling and DR. Multi-AZ DB cluster is the answer when the RTO requirement is tighter than a minute and readable standbys are wanted.
 
-### 1. Network Isolation with VPC
+- **RDS Proxy** is the answer for Lambda connection exhaustion, for enforcing IAM authentication in front of an engine that supports it, and for shortening failover impact on application connections.
 
-- Launch RDS instances in private subnets  
-- Use security groups to tightly control who can connect (by IP, port, protocol)  
-- Block public access unless absolutely necessary  
-- For bastion or app-layer access, use:
-  - SSM Session Manager  
-  - App running in same VPC/AZ  
-  - VPN or Direct Connect  
+- **Public accessibility remediation** is disabling the flag and scoping the security group to the application security group. NACLs are supporting, never primary.
 
-> **Note**: Misconfigured public access is one of the top causes of data exposure in AWS.
+## Limitations
 
-### 2. Encryption at Rest and in Transit
+- Encryption at rest is fixed at creation. Enabling it, disabling it, or changing the key all require a snapshot copy and restore, which produces a new endpoint and an application cutover.
 
-- Enable KMS-based encryption when creating the instance (cannot be turned on later)  
-  This encrypts:
-  - Data on disk  
-  - Automated backups and snapshots  
-  - Read replicas  
-  - Logs and temporary files  
+- No OS access and no superuser. Extensions, plugins, and modules are limited to the supported list per engine version. Workloads needing filesystem access, custom agents, or unsupported extensions require RDS Custom or EC2.
 
-- Use SSL/TLS for connections to encrypt data in transit  
-  - Enforced via parameter groups  
-  - Clients must use SSL libraries or drivers that support encryption  
+- IAM database authentication is engine-limited and connection-rate-limited, so it does not substitute for a connection pool on a high-traffic application.
 
-> **Compliance Note**: For HIPAA, PCI-DSS, etc., both rest and transit encryption are non-negotiable.
+- Automated backups are deleted when the instance is deleted unless a final snapshot is taken, and the retention ceiling is 35 days. Longer retention requires manual snapshots or AWS Backup.
 
-### 3. IAM + Native DB Authentication
+- Multi-AZ failover takes one to two minutes on instance deployments and drops in-flight connections. Applications need retry logic; the failover is transparent to DNS, not to open sessions.
 
-**IAM Authentication** (for MySQL, PostgreSQL, Aurora):
+- Cross-Region read replicas replicate asynchronously, so a Region loss can lose recent transactions, and promotion is manual unless orchestrated.
 
-- Let users or apps authenticate via temporary AWS tokens instead of static DB passwords  
-- Grant permissions via IAM roles  
-- Reduces risk of long-lived credential exposure  
+- Engine audit logging capability varies substantially by engine. MySQL and PostgreSQL rely on plugins configured through parameter and option groups, and Database Activity Streams is not available for the open source engines on RDS.
 
-**Native Authentication**:
+- Restores always create a new instance, never in place, so recovery is a cutover involving new endpoints, security groups, parameter groups, and monitoring targets.
 
-- Use strong password policies  
-- Rotate credentials regularly  
-- Never hardcode passwords in app configs — use Secrets Manager  
-
-> Combine IAM and Secrets Manager for rotated, auditable, secure auth flows.
-
-### 4. Backup and Snapshot Management
-
-- Enable automated backups with a defined retention window  
-- Store manual snapshots in encrypted form  
-
-> **Snapshot Sharing Tips**:
-> - Only share with trusted AWS accounts  
-> - Never share unencrypted snapshots publicly (a known security incident pattern)  
-> - Consider backup lifecycle policies and access controls on snapshots  
-
-### 5. Monitoring, Logging, and Auditing
-
-| Tool                  | What It Does                                                                             |
-|-----------------------|------------------------------------------------------------------------------------------|
-| **CloudWatch Logs**   | Collect PostgreSQL/MySQL slow query logs, error logs, general logs                      |
-| **CloudTrail**        | Audit RDS-related API calls (start instance, snapshot, modify, delete)                  |
-| **RDS Enhanced Monitoring** | Collect OS-level metrics and resource usage                                    |
-| **Security Hub**      | Aggregate RDS misconfigurations from Inspector or Config                                |
-| **Amazon GuardDuty**  | Detect suspicious behavior like unusual login patterns (when CloudTrail is integrated)  |
-
-You should always know:
-
-- Who accessed your DB  
-- When it was accessed  
-- From where  
-- What actions were taken  
-
-### 6. High Availability and Disaster Recovery
-
-- Use Multi-AZ deployments for automatic failover  
-  - Data is synchronously replicated to a standby in another AZ  
-  - Failover is automatic with minimal downtime  
-
-- Use **Read Replicas** for:
-  - Offloading read queries  
-  - Cross-region disaster recovery  
-  - Promoting replicas to standalone DBs in DR scenarios  
-
-- Use backups + snapshots for restore-based DR  
-
-> **Best Practice**: Don't rely on one instance, one AZ, or one Region for critical workloads.
-
-### 7. Patching and Maintenance
-
-- AWS handles automated OS-level patching, but you define the maintenance window  
-- You are responsible for application-level schema upgrades  
-
-**Use blue/green deployments** (via RDS Blue/Green feature or replica promotion) to test upgrades safely  
-
-> Never test patches on production systems. Use replicas or snapshots for staging.
-
----
-
-## Snowy’s Example: Secure RDS PostgreSQL Setup
-
-Snowy is building a secure logging backend that stores event data in RDS.
-
-**Setup**:
-
-- RDS PostgreSQL deployed in a private subnet in `us-west-2`  
-- No public access, only accessible by app servers in same subnet  
-- KMS encryption enabled at launch  
-
-- Database credentials stored in **Secrets Manager**  
-- All app access goes through **IAM roles** with token-based auth  
-- Enhanced Monitoring and CloudWatch logging enabled  
-
-- Snapshots are encrypted and shared only with backup accounts  
-- A read replica is deployed in `us-east-1` for disaster recovery  
-- **GuardDuty** + **Security Hub** monitor for unusual API calls or snapshot sharing  
-
-> **Outcome**: This setup is resilient, encrypted, monitored, and least-privileged.
-
----
-
-## Final Thoughts
-
-Amazon RDS takes care of the infrastructure, but you’re still responsible for the configuration.
-
-> **Most breaches** happen not because RDS failed — but because someone opened port 3306 to the world, shared a snapshot publicly, or skipped IAM controls.
-
-**Use RDS when**:
-
-- You need a managed SQL database without infrastructure overhead  
-- You want built-in backups, HA, and scaling  
-- You need compliance with encryption, audit logging, and IAM integration  
-
-**Avoid RDS when**:
-
-- You need full OS/root access (use EC2-hosted DB instead)  
-- Your app uses a niche database not supported by RDS engines  
-- You need fine-grained control over DB patches or extensions (Aurora may be better)  
-
-> With the right settings, RDS becomes a secure, scalable, and production-grade data layer — especially when combined with IAM, Secrets Manager, encryption, logging, and isolation.
-
+- Maintenance windows apply patches on AWS's schedule within your window. You control when, not whether, and a deferred patch eventually becomes mandatory.
